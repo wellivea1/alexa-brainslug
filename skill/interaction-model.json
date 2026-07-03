@@ -1,0 +1,55 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "brain slug",
+      "intents": [
+        {
+          "name": "AskGPTIntent",
+          "slots": [
+            {
+              "name": "Query",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "ask {Query}",
+            "send {Query}",
+            "question {Query}",
+            "ask chat g p t {Query}"
+          ]
+        },
+        {
+          "name": "LastResponseIntent",
+          "slots": [],
+          "samples": [
+            "last response",
+            "what was the last answer",
+            "read the last answer",
+            "repeat the last answer"
+          ]
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.RepeatIntent",
+          "samples": []
+        }
+      ],
+      "types": []
+    }
+  }
+}

@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+
+brainslug.db
+brainslug.db-*
+data/
+
+bin/
+dist/
+*.exe
+*.test
+coverage.out
+
+.DS_Store
+Thumbs.db
