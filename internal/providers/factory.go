@@ -13,8 +13,6 @@ func NewConfigured(cfg config.Config, client *http.Client) (Provider, error) {
 		return NewOpenAI(cfg.OpenAI, client), nil
 	case "anthropic":
 		return NewAnthropic(cfg.Anthropic, client), nil
-	case "opencode":
-		return OpenCodeStub{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported provider %q", cfg.Provider)
 	}

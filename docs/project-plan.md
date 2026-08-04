@@ -3,114 +3,162 @@
 ## Reviewed Inputs
 
 - Original project request in this repo's attachment.
-- The open ChatGPT conversation titled "Alexa Skill with ChatGPT" in Edge.
+- The ChatGPT conversation the project began with, by way of the Codex session
+  summary. The conversation itself is no longer accessible; nothing in it is
+  known to survive outside this repo.
 - Current Alexa Brainslug code and tests.
 - Prior-art reviews of `jackmcguire1/alexa-chatgpt` and NoobBoard.
 
 ## Goal
 
-Alexa Brainslug is a private Alexa custom skill gateway. Alexa calls a public HTTPS endpoint, the local Go service verifies and routes the request, the selected provider answers, Alexa receives a concise spoken response, and the full answer is stored locally.
+Route a hard question to a model chosen explicitly, and hear the answer back
+through an Echo. Alexa answers the easy things itself; this exists for the
+questions worth spending reasoning tokens on, where the value is deterministic
+control over which model responds.
 
-The supported provider direction is:
+Alexa calls a public HTTPS endpoint, the local Go service verifies and routes
+the request, the selected provider answers, Alexa speaks a concise version, and
+the full answer is stored locally.
 
-- OpenAI API.
-- Anthropic API.
-- OpenCode Go API behind the local gateway.
+Supported providers are the OpenAI API and the Anthropic API.
 
-OpenAI and Anthropic are hosted model providers. OpenCode is a local agent/provider integration and must never be exposed directly to Alexa or the internet.
+Voice is the only intended interface. The dashboard exists for development and
+testing and is not a product surface.
+
+### Distribution
+
+Store publication is an intended direction. It is not scheduled, and it changes
+the threat model rather than extending it: every user's questions would bill one
+API key, strangers' prompts would land in SQLite on a home machine, and a home
+internet connection would become an availability commitment.
+
+Nothing below depends on that decision. Build as though it is public -
+verification, rate limiting, per-user scoping, retention - and treat submission
+as a separate call made later, once metering and hosting exist.
 
 ## Current State
 
 Implemented:
 
 - Go HTTP server with `/health`, `/alexa`, `/history`, and `/`.
-- Alexa request/response routing for launch, ask, last response, help, fallback, stop, cancel, repeat, and session end.
+- Alexa request/response routing for launch, ask, last response, help, fallback,
+  stop, cancel, repeat, and session end.
 - SQLite interaction storage.
 - Minimal local dashboard.
 - Docker Compose and Caddy example.
 - OpenAI provider using the Responses API.
 - Anthropic provider using the Messages API.
-- Provider selection with `AI_PROVIDER=openai|anthropic|opencode`.
-- OpenCode provider placeholder that fails closed.
+- Provider selection with `AI_PROVIDER=openai|anthropic`.
 - Secret-file support for provider credentials.
 - Browser hardening headers, request body cap, and provider error redaction.
 - Basic unit tests and SQLite integration tests.
 
-Known gaps:
+Known gaps, in the order they matter:
 
-- Full Alexa request signature verification is not implemented.
-- OpenCode Go API provider is not implemented.
-- `/` and `/history` have no authentication.
-- `/alexa` has no app-level rate limiting.
-- Long provider latency is not handled asynchronously.
-- History retention controls are not implemented.
-- Provider-specific model and error metadata are still minimal.
+- No configuration both works and is safe. Verification on rejects Alexa;
+  verification off leaves an open proxy to a paid API key.
+- Provider timeouts (12s) exceed Alexa's response budget (8s).
+- `MAX_OUTPUT_TOKENS` is shared between reasoning/thinking tokens and visible
+  text. At 600 a reasoning model can return no text at all.
+- Sample utterances read as whole sentences rather than as the tail of one.
+- `/` and `/history` are unauthenticated and trivially exposed by a
+  whole-origin reverse proxy.
+- `/alexa` has no rate limiting.
+- No test covers the OpenAI provider, which is the default.
+- History has no per-user scoping and no retention controls.
+- `ANTHROPIC_MODEL` default is legacy.
 
 ## Architecture Principles
 
 - Keep the service local-first and private.
-- Keep the Alexa endpoint narrow: it should only accept Alexa-compatible JSON and return Alexa-compatible JSON.
+- Keep the Alexa endpoint narrow: it should only accept Alexa-compatible JSON
+  and return Alexa-compatible JSON.
 - Do not assume LAN-only access works for Alexa.
 - Do not hide the selected provider or model.
 - Store full answers locally, but speak concise answers.
 - Fail closed for security-critical incomplete work.
-- Keep OpenCode behind the gateway, loopback-bound, and permission-limited.
-- Prefer boring Go interfaces and explicit env configuration over framework abstractions.
+- Prefer structural guarantees over documented warnings. A dashboard bound to
+  loopback cannot be exposed by a proxy misconfiguration; a documented warning
+  can be, and was.
+- Prefer boring Go interfaces and explicit env configuration over framework
+  abstractions.
 
 ## Phases
 
-### Phase 1: Reliable Single-Turn MVP
+### Phase 0: Prove the Round Trip
+
+Before more code. Create the skill in the developer console, point it at a
+temporary tunnel with verification off and `ALEXA_ALLOWED_SKILL_ID` set, and
+confirm an utterance from the actual Echo reaches the endpoint. Tear the tunnel
+down afterwards.
 
 Exit criteria:
 
-- OpenAI and Anthropic providers both work with real credentials.
-- Local dashboard shows recent successful and failed interactions.
-- `last response` returns the latest successful response for the Alexa user ID.
-- Tests pass with no real provider keys.
+- A real device invocation produces a request in the local log.
+- The invocation phrasing that works is written down.
 
-Status: mostly complete.
-
-### Phase 2: Alexa Production Safety
-
-Exit criteria:
-
-- `/alexa` validates Alexa signatures, certificate URL, certificate chain, timestamp freshness, and allowed skill ID.
-- `ALEXA_VERIFY_REQUESTS=true` works with the Alexa Developer Console.
-- Request verification has unit tests using captured or fixture requests.
-- `/alexa` has rate limiting by IP and Alexa user ID.
-
-Status: not started; highest priority.
-
-### Phase 3: Dashboard Safety And Retention
-
-Exit criteria:
-
-- Dashboard authentication or documented reverse-proxy auth is in place.
-- History retention can be configured by age and count.
-- Stored errors remain redacted.
-- Prompts and answers remain clearly documented as sensitive local data.
+Everything downstream assumes this works. It is ten minutes to find out.
 
 Status: not started.
 
-### Phase 4: OpenCode Provider
+### Phase 1: Make It Usable
+
+The purpose of the project is slow, expensive answers. The current design treats
+that as an error case.
 
 Exit criteria:
 
-- OpenCode provider uses the Go API/client path selected for this project.
-- OpenCode is only called over loopback or a private local endpoint.
-- Credentials are read from env or secret file.
-- Provider cannot run arbitrary commands from Alexa text.
-- Timeouts, output caps, and audit/history metadata are enforced.
-- Tests cover disabled/misconfigured OpenCode, successful response parsing, and provider errors.
+- A voice deadline shorter than Alexa's 8 seconds returns an acknowledgement
+  rather than a failure.
+- The provider call continues in the background under its own deadline and
+  writes its result to SQLite.
+- `last response` retrieves that result.
+- Token budget and reasoning/thinking effort are configurable per provider, and
+  an empty-text response is reported as its own diagnosable error rather than a
+  generic one.
+- Sample utterances read naturally; slot elicitation accepts free-form questions
+  in the two-turn flow. See `invocation-design.md`.
+- `docker compose up --build` starts and persists to the mounted volume.
 
-Status: placeholder only.
+Status: not started.
 
-### Phase 5: Latency Handling
+### Phase 2: Make It Safe To Expose
 
 Exit criteria:
 
-- Alexa can receive a quick "available shortly" response when a provider call exceeds a voice-safe threshold.
-- The full answer is completed in the background and retrievable via `last response`.
-- No external queue is required for the local MVP.
+- `/alexa` validates Alexa signatures, certificate URL, certificate chain,
+  timestamp freshness, and allowed skill ID, and rejects with HTTP 400.
+- `ALEXA_VERIFY_REQUESTS=true` works with the Alexa Developer Console.
+- Request verification has unit tests using captured or fixture requests,
+  including wrong host, expired certificate, stale timestamp, and tampered body.
+- The public listener serves only `/alexa`. The dashboard, history, and health
+  endpoints are on a separate loopback-bound listener.
+- `/alexa` has rate limiting by IP and Alexa user ID, plus a global daily cap.
 
-Status: planned.
+Status: not started.
+
+### Phase 3: Make It Honest About Multiple Users
+
+Exit criteria:
+
+- History is scoped per Alexa user ID everywhere, not just in `last response`.
+- Retention is configurable by age and count.
+- Stored errors remain redacted.
+- The OpenAI provider has tests covering `output_text`, the nested
+  `output[].content[]` fallback, refusals, API errors, and empty output.
+- Security documentation describes a multi-user threat model.
+
+Status: not started.
+
+### Deferred
+
+Account linking, privacy policy, certification preparation, and per-user quotas.
+All are gated on the distribution decision above.
+
+## Dropped
+
+**OpenCode provider.** OpenCode was an implementation reference for calling an
+agent API, not a product requirement. As a provider it is a slower, more
+expensive route to the same chat completion the hosted providers already give,
+and an agent that runs for minutes cannot fit a voice turn. Removed from the
+provider layer, the configuration surface, and the documentation.

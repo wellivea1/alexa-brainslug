@@ -15,7 +15,6 @@ type Config struct {
 	Provider            string
 	OpenAI              OpenAIConfig
 	Anthropic           AnthropicConfig
-	OpenCode            OpenCodeConfig
 	SQLitePath          string
 	AlexaVerifyRequests bool
 	AlexaAllowedSkillID string
@@ -37,15 +36,6 @@ type AnthropicConfig struct {
 	APIKeyFile      string
 	Model           string
 	BaseURL         string
-	MaxOutputTokens int
-	Timeout         time.Duration
-}
-
-type OpenCodeConfig struct {
-	BaseURL         string
-	Password        string
-	PasswordFile    string
-	Model           string
 	MaxOutputTokens int
 	Timeout         time.Duration
 }
@@ -108,14 +98,6 @@ func Load() (Config, error) {
 			MaxOutputTokens: envInt("ANTHROPIC_MAX_OUTPUT_TOKENS", 600),
 			Timeout:         time.Duration(envInt("ANTHROPIC_TIMEOUT_SECONDS", 12)) * time.Second,
 		},
-		OpenCode: OpenCodeConfig{
-			BaseURL:         envString("OPENCODE_BASE_URL", "http://127.0.0.1:4096"),
-			Password:        envString("OPENCODE_SERVER_PASSWORD", ""),
-			PasswordFile:    envString("OPENCODE_SERVER_PASSWORD_FILE", ""),
-			Model:           strings.TrimSpace(os.Getenv("OPENCODE_MODEL")),
-			MaxOutputTokens: envInt("OPENCODE_MAX_OUTPUT_TOKENS", 600),
-			Timeout:         time.Duration(envInt("OPENCODE_TIMEOUT_SECONDS", 12)) * time.Second,
-		},
 		SQLitePath:          envString("SQLITE_PATH", "./brainslug.db"),
 		AlexaVerifyRequests: envBool("ALEXA_VERIFY_REQUESTS", true),
 		AlexaAllowedSkillID: envString("ALEXA_ALLOWED_SKILL_ID", ""),
@@ -137,14 +119,6 @@ func Load() (Config, error) {
 		}
 		cfg.Anthropic.APIKey = secret
 	}
-	if strings.TrimSpace(cfg.OpenCode.PasswordFile) != "" {
-		secret, err := ReadSecretFile(cfg.OpenCode.PasswordFile)
-		if err != nil {
-			return Config{}, fmt.Errorf("OPENCODE_SERVER_PASSWORD_FILE: %w", err)
-		}
-		cfg.OpenCode.Password = secret
-	}
-
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -179,21 +153,8 @@ func (c Config) Validate() error {
 		if c.Anthropic.Timeout <= 0 {
 			return fmt.Errorf("ANTHROPIC_TIMEOUT_SECONDS must be positive")
 		}
-	case "opencode":
-		if strings.TrimSpace(c.OpenCode.Model) == "" {
-			return fmt.Errorf("OPENCODE_MODEL must be set explicitly")
-		}
-		if strings.TrimSpace(c.OpenCode.BaseURL) == "" {
-			return fmt.Errorf("OPENCODE_BASE_URL must not be empty")
-		}
-		if c.OpenCode.MaxOutputTokens < 16 {
-			return fmt.Errorf("OPENCODE_MAX_OUTPUT_TOKENS must be at least 16")
-		}
-		if c.OpenCode.Timeout <= 0 {
-			return fmt.Errorf("OPENCODE_TIMEOUT_SECONDS must be positive")
-		}
 	default:
-		return fmt.Errorf("AI_PROVIDER must be one of openai, anthropic, opencode")
+		return fmt.Errorf("AI_PROVIDER must be one of openai, anthropic")
 	}
 	return nil
 }
@@ -202,8 +163,6 @@ func (c Config) SelectedModel() string {
 	switch c.Provider {
 	case "anthropic":
 		return c.Anthropic.Model
-	case "opencode":
-		return c.OpenCode.Model
 	default:
 		return c.OpenAI.Model
 	}
@@ -213,15 +172,13 @@ func (c Config) SelectedMaxOutputTokens() int {
 	switch c.Provider {
 	case "anthropic":
 		return c.Anthropic.MaxOutputTokens
-	case "opencode":
-		return c.OpenCode.MaxOutputTokens
 	default:
 		return c.OpenAI.MaxOutputTokens
 	}
 }
 
 func (c Config) SecretValues() []string {
-	return []string{c.OpenAI.APIKey, c.Anthropic.APIKey, c.OpenCode.Password}
+	return []string{c.OpenAI.APIKey, c.Anthropic.APIKey}
 }
 
 func envString(key, fallback string) string {

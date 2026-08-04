@@ -22,7 +22,7 @@ git status --short
 - Provider choice is explicit and visible in config, health output, and history.
 - Model choice is explicit and not silently changed.
 - Provider errors are stored only after redaction.
-- No API keys, OpenCode passwords, tokens, or request signatures are logged.
+- No API keys, tokens, or request signatures are logged.
 - Handlers stay small enough to test without a live provider.
 - Provider tests use local HTTP test servers, not real API keys.
 - SQLite tests use temp databases.
@@ -45,9 +45,9 @@ git status --short
 - `ALEXA_VERIFY_REQUESTS=true` is the default.
 - Public `/alexa` is not used until real Alexa verification is implemented.
 - `ALEXA_ALLOWED_SKILL_ID` is set before serious testing.
-- Dashboard is not exposed publicly without authentication.
+- The reverse proxy routes `/alexa` only. Confirm by requesting `/history` and
+  `/` against the public hostname and checking for a 404.
 - HTTPS is provided by Caddy, Cloudflare Tunnel, or equivalent reverse proxy.
-- OpenCode is not exposed directly.
 - Rate limiting exists before serious use.
 - History retention is configured before storing sensitive long-lived prompts.
 
@@ -67,11 +67,13 @@ Anthropic:
 - `ANTHROPIC_API_KEY` or `ANTHROPIC_API_KEY_FILE` is set.
 - `ANTHROPIC_BASE_URL` is blank unless using an Anthropic-compatible endpoint intentionally.
 
-OpenCode:
+Both:
 
-- `AI_PROVIDER=opencode` must fail closed until the provider is implemented.
-- OpenCode service must bind to loopback or a private local interface.
-- Gateway must enforce timeouts, output limits, and a narrow request shape.
+- The output token cap leaves room for reasoning/thinking tokens as well as
+  visible text. A cap that a reasoning model can exhaust before writing anything
+  surfaces as "response did not include text output".
+- The provider timeout is shorter than Alexa's 8-second budget, or the deferred
+  answer path is in place.
 
 ## Manual Smoke Test
 
@@ -99,9 +101,13 @@ Expected:
 
 As of this review:
 
-- `go test ./...` passes.
-- `go vet ./...` passes.
-- The service aligns well with the original local/private gateway goal.
-- The biggest blocker is Alexa request verification.
-- The biggest provider gap is OpenCode Go API implementation.
-- The biggest operational gap is dashboard authentication or reverse-proxy auth.
+- `go test ./...`, `go vet ./...`, and `go build ./cmd/brainslug` pass.
+- The code is clean; the problems are in configuration, deployment, and scope.
+- The biggest blocker is Alexa request verification. Until it exists there is no
+  configuration that both works and is safe to expose.
+- The biggest design gap is that slow answers are treated as failures, when slow
+  answers are the entire point of the project.
+- The biggest operational gap was a reverse-proxy example that published the
+  history feed. Fixed in `Caddyfile.example`; the structural fix (a separate
+  loopback listener) is Phase 2.
+- Docker deployment has not been verified end to end.

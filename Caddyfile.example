@@ -1,3 +1,15 @@
 brain-slug.example.com {
-    reverse_proxy 127.0.0.1:8080
+	# Only /alexa is public.
+	#
+	# The service also serves a dashboard at / and a history JSON feed at
+	# /history, both unauthenticated and both containing every prompt and
+	# answer that has passed through the gateway. A bare
+	# `reverse_proxy 127.0.0.1:8080` publishes them to the internet.
+	handle /alexa {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	handle {
+		respond "Not found" 404
+	}
 }

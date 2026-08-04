@@ -1,6 +1,6 @@
 # Alexa Skill Setup
 
-This project is intended for a private custom skill, not Skill Store publication.
+This covers setting up a private custom skill for your own account. Skill Store publication is a possible future direction with prerequisites that do not exist yet - see `security.md`.
 
 ## Steps
 
@@ -20,7 +20,7 @@ https://your-domain.example/alexa
 
 10. Test the skill.
 
-Example phrases:
+Example phrases, as the model stands today:
 
 ```text
 Alexa, open Brain Slug
@@ -28,11 +28,15 @@ Alexa, ask Brain Slug ask what is SQLite
 Alexa, ask Brain Slug last response
 ```
 
+The second one says "ask" twice. That is a defect in the sample utterances, not in the console setup - see `invocation-design.md` for the replacements.
+
 ## Notes About AMAZON.SearchQuery
 
-`AMAZON.SearchQuery` captures free-form speech better than a custom slot for arbitrary questions. It can still be sensitive to sample utterances and invocation phrasing. If Alexa misses the query, add a small number of natural samples rather than building a large conversation model.
+`AMAZON.SearchQuery` captures free-form speech better than a custom slot for arbitrary questions, but it is greedy, so Amazon requires a carrier phrase in every sample utterance. A sample of just `{Query}` is rejected at build time.
 
-Do not overbuild multi-turn conversation in the first version. The local dashboard stores full answers for review.
+The carrier phrase has to read as a continuation of the invocation phrase Alexa supplies, because the two are concatenated. If Alexa misses the query, add a small number of natural samples rather than building a large conversation model.
+
+Slot elicitation is the exception: during a dialog the user's whole utterance fills the slot with no carrier phrase needed. That makes the two-turn flow more permissive than the one-shot flow, and it is worth adding.
 
 ## Testing With Verification Disabled
 
