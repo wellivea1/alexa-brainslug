@@ -53,19 +53,34 @@ Implemented:
 - Browser hardening headers, request body cap, and provider error redaction.
 - Basic unit tests and SQLite integration tests.
 
+Added in the architecture pass:
+
+- Versioned, transactional schema migrations.
+- Graceful shutdown, full server timeouts, and a startup path that does not
+  skip its own cleanup.
+- Shared provider HTTP plumbing, so a new provider is its wire format and
+  nothing else.
+- Typed provider errors, so the spoken message can distinguish a
+  misconfiguration from a busy provider from an exhausted token budget.
+- A speech package that shapes model output for a voice, with the Markdown
+  stripping that used to live in the OpenAI provider.
+- Linting, formatting, and CI, including a Docker build that has to start.
+
 Known gaps, in the order they matter:
 
 - No configuration both works and is safe. Verification on rejects Alexa;
   verification off leaves an open proxy to a paid API key.
 - Provider timeouts (12s) exceed Alexa's response budget (8s).
 - `MAX_OUTPUT_TOKENS` is shared between reasoning/thinking tokens and visible
-  text. At 600 a reasoning model can return no text at all.
+  text. At 600 a reasoning model can return no text at all. The failure is now
+  reported as its own error rather than a generic one, but the default is
+  still wrong.
 - Sample utterances read as whole sentences rather than as the tail of one.
 - `/` and `/history` are unauthenticated and trivially exposed by a
   whole-origin reverse proxy.
 - `/alexa` has no rate limiting.
-- No test covers the OpenAI provider, which is the default.
-- History has no per-user scoping and no retention controls.
+- History has no per-user scoping outside `last response`, and no retention
+  controls.
 - `ANTHROPIC_MODEL` default is legacy.
 
 ## Architecture Principles
@@ -82,6 +97,38 @@ Known gaps, in the order they matter:
   can be, and was.
 - Prefer boring Go interfaces and explicit env configuration over framework
   abstractions.
+- Dependencies point inward and never cycle. Packages take narrow option
+  structs rather than importing the configuration package, so each one is
+  testable on its own.
+- One runtime dependency. A SQLite driver earns its place; a vendor SDK for a
+  single HTTP endpoint does not.
+
+## Engineering Standards
+
+The service is meant to run unattended, answer a stranger's question, spend
+money doing it, and keep a record. That is the bar the code is held to, and it
+is why the following are treated as requirements rather than polish.
+
+- Every failure path is either handled or explicitly and visibly ignored, with
+  a comment saying why. Errors wrap with `%w`; callers that need to
+  distinguish a failure match a sentinel or a typed error.
+- Configuration is validated at startup, and an unparseable value is a startup
+  failure naming the variable rather than a silent default.
+- The process starts and stops cleanly: no `os.Exit` past a defer, signal
+  handling, and a bounded drain on shutdown.
+- Schema changes are versioned, transactional, and append-only.
+- Credentials never reach a log, an error, or the database. Alexa user IDs
+  never reach a provider unhashed.
+- Exported symbols and packages are documented. Comments record why, not what.
+- Linting, formatting, the race detector, and a container that actually starts
+  are enforced by CI, not by review attention.
+
+`../CONTRIBUTING.md` is the working version of this list.
+
+Known deliberate gaps, so they are not mistaken for oversights: there are no
+metrics or tracing, and no structured request IDs. Both are worth adding when
+there is more than one user to correlate across, and neither is worth the
+weight before then.
 
 ## Phases
 

@@ -1,150 +1,73 @@
 package providers
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
-	"alexa-brainslug/internal/config"
-	"alexa-brainslug/internal/prompts"
-	"alexa-brainslug/internal/security"
+	"github.com/wellivea1/alexa-brainslug/internal/config"
+	"github.com/wellivea1/alexa-brainslug/internal/speech"
 )
 
-const defaultOpenAIBaseURL = "https://api.openai.com/v1"
+const (
+	defaultOpenAIBaseURL = "https://api.openai.com/v1"
+	openAIResponsesPath  = "/responses"
+	openAIName           = "openai"
+)
 
+// OpenAI calls the OpenAI Responses API.
 type OpenAI struct {
-	apiKey          string
-	baseURL         string
-	model           string
-	maxOutputTokens int
-	timeout         time.Duration
-	client          *http.Client
+	ep endpoint
 }
 
+// NewOpenAI builds an OpenAI provider. Passing a nil client uses one with the
+// configured timeout; tests pass their own.
 func NewOpenAI(cfg config.OpenAIConfig, client *http.Client) *OpenAI {
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 12 * time.Second
-	}
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		baseURL = defaultOpenAIBaseURL
-	}
 	return &OpenAI{
-		apiKey:          strings.TrimSpace(cfg.APIKey),
-		baseURL:         baseURL,
-		model:           strings.TrimSpace(cfg.Model),
-		maxOutputTokens: cfg.MaxOutputTokens,
-		timeout:         timeout,
-		client:          client,
+		ep: newEndpoint(cfg.APIKey, cfg.BaseURL, defaultOpenAIBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
 	}
 }
 
-func (p *OpenAI) Name() string {
-	return "openai"
-}
+// Name implements Provider.
+func (p *OpenAI) Name() string { return openAIName }
 
+// Ask implements Provider.
 func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
-	if p.apiKey == "" {
-		return Response{}, errors.New("OPENAI_API_KEY is not configured")
-	}
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = p.model
-	}
-	if model == "" {
-		return Response{}, errors.New("OPENAI_MODEL is not configured")
-	}
-	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
-		return Response{}, errors.New("prompt is empty")
-	}
-	maxTokens := req.MaxOutputTokens
-	if maxTokens == 0 {
-		maxTokens = p.maxOutputTokens
-	}
-	if maxTokens < 16 {
-		maxTokens = 16
-	}
-	systemPrompt := strings.TrimSpace(req.SystemPrompt)
-	if systemPrompt == "" {
-		systemPrompt = prompts.DefaultSystemPrompt
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-
-	body := openAIRequest{
-		Model:           model,
-		Instructions:    systemPrompt,
-		Input:           prompt,
-		MaxOutputTokens: maxTokens,
-		Store:           false,
-		Text:            &openAITextConfig{Verbosity: "low"},
-		SafetyID:        safetyIdentifier(req.UserID),
-	}
-
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return Response{}, fmt.Errorf("marshal OpenAI request: %w", err)
-	}
-
-	endpoint, err := responsesEndpoint(p.baseURL)
+	resolved, err := p.ep.resolve(req, "OPENAI_API_KEY", "OPENAI_MODEL")
 	if err != nil {
 		return Response{}, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return Response{}, fmt.Errorf("create OpenAI request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	started := time.Now()
-	httpResp, err := p.client.Do(httpReq)
-	latency := time.Since(started)
-	if err != nil {
-		return Response{}, fmt.Errorf("call OpenAI responses API: %w", err)
+	payload := openAIRequest{
+		Model:           resolved.model,
+		Instructions:    resolved.systemPrompt,
+		Input:           resolved.prompt,
+		MaxOutputTokens: resolved.maxTokens,
+		Store:           false,
+		Text:            &openAITextConfig{Verbosity: "low"},
+		SafetyID:        endUserIdentifier(req.UserID),
 	}
-	defer httpResp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(httpResp.Body, 4<<20))
-	if err != nil {
-		return Response{}, fmt.Errorf("read OpenAI response: %w", err)
-	}
+	headers := map[string]string{"Authorization": "Bearer " + p.ep.apiKey}
 
 	var decoded openAIResponse
-	if err := json.Unmarshal(respBody, &decoded); err != nil {
-		return Response{}, fmt.Errorf("decode OpenAI response: %w", err)
+	status, latency, err := p.ep.postJSON(ctx, openAIResponsesPath, headers, payload, &decoded)
+	if err != nil {
+		return Response{}, err
 	}
-	if httpResp.StatusCode < 200 || httpResp.StatusCode > 299 {
-		if decoded.Error.Message != "" {
-			return Response{}, fmt.Errorf("OpenAI API error: %s", security.RedactString(decoded.Error.Message, p.apiKey))
-		}
-		return Response{}, fmt.Errorf("OpenAI API error: status %d", httpResp.StatusCode)
+	if status < http.StatusOK || status > 299 {
+		return Response{}, p.ep.apiError(openAIName, status, decoded.Error.Message)
 	}
 
-	fullAnswer := strings.TrimSpace(extractOutputText(decoded))
-	if fullAnswer == "" {
-		return Response{}, errors.New("OpenAI response did not include text output")
+	full := strings.TrimSpace(decoded.outputText())
+	if full == "" {
+		return Response{}, ErrEmptyResponse
 	}
+
 	return Response{
-		ShortAnswer:  voiceSummary(fullAnswer, 120),
-		FullAnswer:   fullAnswer,
-		Model:        firstNonEmpty(decoded.Model, model),
-		ProviderName: p.Name(),
+		ShortAnswer:  speech.Summarize(full, spokenWordLimit),
+		FullAnswer:   full,
+		Model:        firstNonEmpty(decoded.Model, resolved.model),
+		ProviderName: openAIName,
 		Latency:      latency,
 	}, nil
 }
@@ -187,20 +110,19 @@ type openAIOutputContent struct {
 	Refusal string `json:"refusal"`
 }
 
-func responsesEndpoint(baseURL string) (string, error) {
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", fmt.Errorf("OPENAI_BASE_URL is invalid: %q", baseURL)
+// outputText extracts the answer.
+//
+// The Responses API exposes a flattened output_text convenience field, but it
+// is absent on some response shapes, so the nested output array is the
+// fallback. A refusal is returned as the answer rather than discarded: the
+// user asked a question and deserves to hear that it was declined.
+func (r openAIResponse) outputText() string {
+	if strings.TrimSpace(r.OutputText) != "" {
+		return r.OutputText
 	}
-	return strings.TrimRight(baseURL, "/") + "/responses", nil
-}
 
-func extractOutputText(resp openAIResponse) string {
-	if strings.TrimSpace(resp.OutputText) != "" {
-		return resp.OutputText
-	}
 	var parts []string
-	for _, item := range resp.Output {
+	for _, item := range r.Output {
 		for _, content := range item.Content {
 			switch content.Type {
 			case "output_text":
@@ -215,59 +137,4 @@ func extractOutputText(resp openAIResponse) string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
-}
-
-func voiceSummary(text string, maxWords int) string {
-	text = strings.TrimSpace(stripMarkdownForSpeech(text))
-	if text == "" {
-		return ""
-	}
-	words := strings.Fields(text)
-	if len(words) <= maxWords {
-		return text
-	}
-	summary := strings.Join(words[:maxWords], " ")
-	if idx := strings.LastIndexAny(summary, ".!?"); idx > len(summary)/2 {
-		summary = strings.TrimSpace(summary[:idx+1])
-	}
-	return summary + " More detail is available in the local dashboard."
-}
-
-func stripMarkdownForSpeech(text string) string {
-	replacements := []struct {
-		old string
-		new string
-	}{
-		{"**", ""},
-		{"__", ""},
-		{"`", ""},
-		{"### ", ""},
-		{"## ", ""},
-		{"# ", ""},
-		{"- ", ""},
-		{"* ", ""},
-	}
-	cleaned := text
-	for _, replacement := range replacements {
-		cleaned = strings.ReplaceAll(cleaned, replacement.old, replacement.new)
-	}
-	return cleaned
-}
-
-func safetyIdentifier(userID string) string {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(userID))
-	return hex.EncodeToString(sum[:])
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

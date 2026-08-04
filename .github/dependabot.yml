@@ -1,0 +1,29 @@
+version: 2
+
+updates:
+  # The service itself has one runtime dependency, so the volume here is
+  # mostly the linter's transitive tree. Grouping keeps that to one pull
+  # request rather than a weekly pile of them.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

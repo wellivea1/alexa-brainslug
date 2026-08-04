@@ -1,148 +1,78 @@
 package providers
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
-	"alexa-brainslug/internal/config"
-	"alexa-brainslug/internal/prompts"
-	"alexa-brainslug/internal/security"
+	"github.com/wellivea1/alexa-brainslug/internal/config"
+	"github.com/wellivea1/alexa-brainslug/internal/speech"
 )
 
 const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com/v1"
-	anthropicVersion        = "2023-06-01"
+	anthropicMessagesPath   = "/messages"
+	anthropicName           = "anthropic"
+
+	// anthropicVersion pins the Messages API wire format. Anthropic treats
+	// this header as required and uses it to keep breaking changes opt-in, so
+	// it is a deliberate pin rather than a value to keep current.
+	anthropicVersion = "2023-06-01"
 )
 
+// Anthropic calls the Anthropic Messages API.
 type Anthropic struct {
-	apiKey          string
-	baseURL         string
-	model           string
-	maxOutputTokens int
-	timeout         time.Duration
-	client          *http.Client
+	ep endpoint
 }
 
+// NewAnthropic builds an Anthropic provider. Passing a nil client uses one
+// with the configured timeout; tests pass their own.
 func NewAnthropic(cfg config.AnthropicConfig, client *http.Client) *Anthropic {
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 12 * time.Second
-	}
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		baseURL = defaultAnthropicBaseURL
-	}
 	return &Anthropic{
-		apiKey:          strings.TrimSpace(cfg.APIKey),
-		baseURL:         baseURL,
-		model:           strings.TrimSpace(cfg.Model),
-		maxOutputTokens: cfg.MaxOutputTokens,
-		timeout:         timeout,
-		client:          client,
+		ep: newEndpoint(cfg.APIKey, cfg.BaseURL, defaultAnthropicBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
 	}
 }
 
-func (p *Anthropic) Name() string {
-	return "anthropic"
-}
+// Name implements Provider.
+func (p *Anthropic) Name() string { return anthropicName }
 
+// Ask implements Provider.
 func (p *Anthropic) Ask(ctx context.Context, req Request) (Response, error) {
-	if p.apiKey == "" {
-		return Response{}, errors.New("ANTHROPIC_API_KEY is not configured")
-	}
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = p.model
-	}
-	if model == "" {
-		return Response{}, errors.New("ANTHROPIC_MODEL is not configured")
-	}
-	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
-		return Response{}, errors.New("prompt is empty")
-	}
-	maxTokens := req.MaxOutputTokens
-	if maxTokens == 0 {
-		maxTokens = p.maxOutputTokens
-	}
-	if maxTokens < 16 {
-		maxTokens = 16
-	}
-	systemPrompt := strings.TrimSpace(req.SystemPrompt)
-	if systemPrompt == "" {
-		systemPrompt = prompts.DefaultSystemPrompt
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-
-	body := anthropicRequest{
-		Model:     model,
-		System:    systemPrompt,
-		MaxTokens: maxTokens,
-		Messages:  anthropicMessages(req.PriorContext, prompt),
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return Response{}, fmt.Errorf("marshal Anthropic request: %w", err)
-	}
-
-	endpoint, err := anthropicMessagesEndpoint(p.baseURL)
+	resolved, err := p.ep.resolve(req, "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL")
 	if err != nil {
 		return Response{}, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return Response{}, fmt.Errorf("create Anthropic request: %w", err)
-	}
-	httpReq.Header.Set("x-api-key", p.apiKey)
-	httpReq.Header.Set("anthropic-version", anthropicVersion)
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	started := time.Now()
-	httpResp, err := p.client.Do(httpReq)
-	latency := time.Since(started)
-	if err != nil {
-		return Response{}, fmt.Errorf("call Anthropic messages API: %w", err)
+	payload := anthropicRequest{
+		Model:     resolved.model,
+		System:    resolved.systemPrompt,
+		MaxTokens: resolved.maxTokens,
+		Messages:  anthropicMessages(req.PriorContext, resolved.prompt),
 	}
-	defer httpResp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(httpResp.Body, 4<<20))
-	if err != nil {
-		return Response{}, fmt.Errorf("read Anthropic response: %w", err)
+	headers := map[string]string{
+		"x-api-key":         p.ep.apiKey,
+		"anthropic-version": anthropicVersion,
 	}
 
 	var decoded anthropicResponse
-	if err := json.Unmarshal(respBody, &decoded); err != nil {
-		return Response{}, fmt.Errorf("decode Anthropic response: %w", err)
+	status, latency, err := p.ep.postJSON(ctx, anthropicMessagesPath, headers, payload, &decoded)
+	if err != nil {
+		return Response{}, err
 	}
-	if httpResp.StatusCode < 200 || httpResp.StatusCode > 299 {
-		if decoded.Error.Message != "" {
-			return Response{}, fmt.Errorf("Anthropic API error: %s", security.RedactString(decoded.Error.Message, p.apiKey))
-		}
-		return Response{}, fmt.Errorf("Anthropic API error: status %d", httpResp.StatusCode)
+	if status < http.StatusOK || status > 299 {
+		return Response{}, p.ep.apiError(anthropicName, status, decoded.Error.Message)
 	}
 
-	fullAnswer := strings.TrimSpace(extractAnthropicText(decoded))
-	if fullAnswer == "" {
-		return Response{}, errors.New("Anthropic response did not include text output")
+	full := strings.TrimSpace(decoded.text())
+	if full == "" {
+		return Response{}, ErrEmptyResponse
 	}
+
 	return Response{
-		ShortAnswer:  voiceSummary(fullAnswer, 120),
-		FullAnswer:   fullAnswer,
-		Model:        firstNonEmpty(decoded.Model, model),
-		ProviderName: p.Name(),
+		ShortAnswer:  speech.Summarize(full, spokenWordLimit),
+		FullAnswer:   full,
+		Model:        firstNonEmpty(decoded.Model, resolved.model),
+		ProviderName: anthropicName,
 		Latency:      latency,
 	}, nil
 }
@@ -175,6 +105,9 @@ type anthropicError struct {
 	Message string `json:"message"`
 }
 
+// anthropicMessages builds the message list, dropping prior turns with an
+// unrecognized role or empty content. The Messages API rejects both, and a
+// malformed history entry should not fail the current question.
 func anthropicMessages(prior []Message, prompt string) []anthropicMessage {
 	messages := make([]anthropicMessage, 0, len(prior)+1)
 	for _, message := range prior {
@@ -183,26 +116,20 @@ func anthropicMessages(prior []Message, prompt string) []anthropicMessage {
 		if content == "" {
 			continue
 		}
-		switch role {
-		case "assistant", "user":
+		if role == "assistant" || role == "user" {
 			messages = append(messages, anthropicMessage{Role: role, Content: content})
 		}
 	}
-	messages = append(messages, anthropicMessage{Role: "user", Content: prompt})
-	return messages
+	return append(messages, anthropicMessage{Role: "user", Content: prompt})
 }
 
-func anthropicMessagesEndpoint(baseURL string) (string, error) {
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", fmt.Errorf("ANTHROPIC_BASE_URL is invalid: %q", baseURL)
-	}
-	return strings.TrimRight(baseURL, "/") + "/messages", nil
-}
-
-func extractAnthropicText(resp anthropicResponse) string {
+// text concatenates the text blocks of a response. Thinking blocks and other
+// non-text content carry no spoken answer and are skipped; a response made
+// entirely of them yields ErrEmptyResponse, which is the reasoning-budget
+// exhaustion case.
+func (r anthropicResponse) text() string {
 	var parts []string
-	for _, content := range resp.Content {
+	for _, content := range r.Content {
 		if content.Type == "text" && strings.TrimSpace(content.Text) != "" {
 			parts = append(parts, content.Text)
 		}

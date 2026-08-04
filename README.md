@@ -36,6 +36,25 @@ Other known gaps that will bite before that one is fixed:
 
 See [docs/project-plan.md](docs/project-plan.md) for the ordering.
 
+## Repository Layout
+
+```text
+cmd/brainslug      process lifecycle, routing, middleware wiring
+internal/alexa     skill endpoint: verification, intent routing, responses
+internal/providers AI backends; one thin HTTP client per provider
+internal/speech    shaping model output into text safe to read aloud
+internal/store     SQLite history and schema migrations
+internal/config    environment loading and startup validation
+internal/security  HTTP middleware and secret redaction
+internal/prompts   the system instruction sent with every question
+internal/web       local development dashboard
+skill/             Alexa interaction model
+```
+
+Dependencies point inward and never cycle. `internal/alexa` takes an options
+struct rather than importing `internal/config`, so the skill logic is testable
+without a process environment.
+
 ## Requirements
 
 - Go 1.26 or newer
@@ -55,6 +74,20 @@ notepad .env
 go mod download
 go run ./cmd/brainslug
 ```
+
+Build, test, and lint:
+
+```bash
+go test ./...
+```
+
+```bash
+go tool golangci-lint run ./...
+```
+
+The linter is pinned as a tool dependency in `go.mod`, so it needs no separate
+install and CI runs the same version. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the full loop and the standards it enforces.
 
 Set at least:
 

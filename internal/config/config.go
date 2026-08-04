@@ -1,7 +1,17 @@
+// Package config loads and validates operator configuration from the
+// environment.
+//
+// Two rules shape this package. Configuration is explicit: there is no
+// inferred model, no provider guessed from which key happens to be set, and
+// no silently substituted default for a value the operator supplied. And
+// configuration is validated once, at startup, so that a misconfiguration is
+// a startup failure with a named variable rather than a failed voice request
+// an hour later.
 package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -9,19 +19,63 @@ import (
 	"time"
 )
 
+// Supported values for AI_PROVIDER.
+const (
+	ProviderOpenAI    = "openai"
+	ProviderAnthropic = "anthropic"
+)
+
+// Defaults applied when a variable is unset. A variable that is set but
+// unparseable is an error, never a silent fall back to these.
+const (
+	defaultServerAddr      = ":8080"
+	defaultSQLitePath      = "./brainslug.db"
+	defaultMaxOutputTokens = 600
+	defaultTimeoutSeconds  = 12
+	defaultLogLevel        = "info"
+
+	// minOutputTokens is the floor below which a response cannot hold a
+	// usable sentence.
+	minOutputTokens = 16
+)
+
+// Config is the validated runtime configuration.
 type Config struct {
-	ServerAddr          string
-	PublicBaseURL       string
-	Provider            string
-	OpenAI              OpenAIConfig
-	Anthropic           AnthropicConfig
-	SQLitePath          string
+	// ServerAddr is the local bind address.
+	ServerAddr string
+
+	// PublicBaseURL is the externally reachable origin. It is reference
+	// information for operators and controls whether HSTS is emitted; the
+	// service never dials it.
+	PublicBaseURL string
+
+	// Provider selects the AI backend: ProviderOpenAI or ProviderAnthropic.
+	Provider string
+
+	// OpenAI and Anthropic hold per-provider settings. Only the selected
+	// provider's block is validated, so an operator does not need credentials
+	// for a provider they are not using.
+	OpenAI    OpenAIConfig
+	Anthropic AnthropicConfig
+
+	// SQLitePath is the local history database.
+	SQLitePath string
+
+	// AlexaVerifyRequests gates Alexa request signature verification. It
+	// defaults to true and fails closed.
 	AlexaVerifyRequests bool
+
+	// AlexaAllowedSkillID, when set, restricts the endpoint to one skill.
 	AlexaAllowedSkillID string
-	LogLevel            string
-	SaveHistory         bool
+
+	// LogLevel is debug, info, warn, or error.
+	LogLevel string
+
+	// SaveHistory controls whether interactions are persisted.
+	SaveHistory bool
 }
 
+// OpenAIConfig holds OpenAI provider settings.
 type OpenAIConfig struct {
 	APIKey          string
 	APIKeyFile      string
@@ -31,6 +85,7 @@ type OpenAIConfig struct {
 	Timeout         time.Duration
 }
 
+// AnthropicConfig holds Anthropic provider settings.
 type AnthropicConfig struct {
 	APIKey          string
 	APIKeyFile      string
@@ -40,6 +95,12 @@ type AnthropicConfig struct {
 	Timeout         time.Duration
 }
 
+// LoadDotEnv reads path and sets any variable that is not already present in
+// the process environment. A missing file is not an error.
+//
+// It mutates the process environment, so it must run before Load and should
+// not run concurrently with anything reading the environment. Variables
+// already set win, which lets a shell or container override the file.
 func LoadDotEnv(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -48,7 +109,10 @@ func LoadDotEnv(path string) error {
 		}
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		// Read-only handle; a close failure cannot lose data.
+		_ = file.Close()
+	}()
 
 	scanner := bufio.NewScanner(file)
 	lineNumber := 0
@@ -77,47 +141,47 @@ func LoadDotEnv(path string) error {
 	return scanner.Err()
 }
 
+// Load reads configuration from the environment and validates it.
+//
+// Every parse failure is collected and reported together, so an operator
+// fixing a broken .env sees every problem in one run rather than one per
+// restart.
 func Load() (Config, error) {
+	env := &envReader{}
+
 	cfg := Config{
-		ServerAddr:    envString("SERVER_ADDR", ":8080"),
-		PublicBaseURL: envString("PUBLIC_BASE_URL", ""),
-		Provider:      strings.ToLower(envString("AI_PROVIDER", "openai")),
+		ServerAddr:    env.str("SERVER_ADDR", defaultServerAddr),
+		PublicBaseURL: env.str("PUBLIC_BASE_URL", ""),
+		Provider:      strings.ToLower(env.str("AI_PROVIDER", ProviderOpenAI)),
 		OpenAI: OpenAIConfig{
-			APIKey:          envString("OPENAI_API_KEY", ""),
-			APIKeyFile:      envString("OPENAI_API_KEY_FILE", ""),
-			Model:           strings.TrimSpace(os.Getenv("OPENAI_MODEL")),
-			BaseURL:         envString("OPENAI_BASE_URL", ""),
-			MaxOutputTokens: envInt("OPENAI_MAX_OUTPUT_TOKENS", 600),
-			Timeout:         time.Duration(envInt("OPENAI_TIMEOUT_SECONDS", 12)) * time.Second,
+			APIKey:          env.str("OPENAI_API_KEY", ""),
+			APIKeyFile:      env.str("OPENAI_API_KEY_FILE", ""),
+			Model:           env.str("OPENAI_MODEL", ""),
+			BaseURL:         env.str("OPENAI_BASE_URL", ""),
+			MaxOutputTokens: env.intVal("OPENAI_MAX_OUTPUT_TOKENS", defaultMaxOutputTokens),
+			Timeout:         env.seconds("OPENAI_TIMEOUT_SECONDS", defaultTimeoutSeconds),
 		},
 		Anthropic: AnthropicConfig{
-			APIKey:          envString("ANTHROPIC_API_KEY", ""),
-			APIKeyFile:      envString("ANTHROPIC_API_KEY_FILE", ""),
-			Model:           strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")),
-			BaseURL:         envString("ANTHROPIC_BASE_URL", ""),
-			MaxOutputTokens: envInt("ANTHROPIC_MAX_OUTPUT_TOKENS", 600),
-			Timeout:         time.Duration(envInt("ANTHROPIC_TIMEOUT_SECONDS", 12)) * time.Second,
+			APIKey:          env.str("ANTHROPIC_API_KEY", ""),
+			APIKeyFile:      env.str("ANTHROPIC_API_KEY_FILE", ""),
+			Model:           env.str("ANTHROPIC_MODEL", ""),
+			BaseURL:         env.str("ANTHROPIC_BASE_URL", ""),
+			MaxOutputTokens: env.intVal("ANTHROPIC_MAX_OUTPUT_TOKENS", defaultMaxOutputTokens),
+			Timeout:         env.seconds("ANTHROPIC_TIMEOUT_SECONDS", defaultTimeoutSeconds),
 		},
-		SQLitePath:          envString("SQLITE_PATH", "./brainslug.db"),
-		AlexaVerifyRequests: envBool("ALEXA_VERIFY_REQUESTS", true),
-		AlexaAllowedSkillID: envString("ALEXA_ALLOWED_SKILL_ID", ""),
-		LogLevel:            envString("LOG_LEVEL", "info"),
-		SaveHistory:         envBool("SAVE_HISTORY", true),
+		SQLitePath:          env.str("SQLITE_PATH", defaultSQLitePath),
+		AlexaVerifyRequests: env.boolVal("ALEXA_VERIFY_REQUESTS", true),
+		AlexaAllowedSkillID: env.str("ALEXA_ALLOWED_SKILL_ID", ""),
+		LogLevel:            env.str("LOG_LEVEL", defaultLogLevel),
+		SaveHistory:         env.boolVal("SAVE_HISTORY", true),
 	}
 
-	if strings.TrimSpace(cfg.OpenAI.APIKeyFile) != "" {
-		secret, err := ReadSecretFile(cfg.OpenAI.APIKeyFile)
-		if err != nil {
-			return Config{}, fmt.Errorf("OPENAI_API_KEY_FILE: %w", err)
-		}
-		cfg.OpenAI.APIKey = secret
+	if err := env.err(); err != nil {
+		return Config{}, err
 	}
-	if strings.TrimSpace(cfg.Anthropic.APIKeyFile) != "" {
-		secret, err := ReadSecretFile(cfg.Anthropic.APIKeyFile)
-		if err != nil {
-			return Config{}, fmt.Errorf("ANTHROPIC_API_KEY_FILE: %w", err)
-		}
-		cfg.Anthropic.APIKey = secret
+
+	if err := cfg.loadSecretFiles(); err != nil {
+		return Config{}, err
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -125,63 +189,106 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-func (c Config) Validate() error {
-	if strings.TrimSpace(c.ServerAddr) == "" {
-		return fmt.Errorf("SERVER_ADDR must not be empty")
+// loadSecretFiles replaces inline credentials with file contents where a
+// *_FILE variable points at one. The file wins, so a stale inline value
+// cannot shadow a mounted secret.
+func (c *Config) loadSecretFiles() error {
+	sources := []struct {
+		variable string
+		path     string
+		target   *string
+	}{
+		{"OPENAI_API_KEY_FILE", c.OpenAI.APIKeyFile, &c.OpenAI.APIKey},
+		{"ANTHROPIC_API_KEY_FILE", c.Anthropic.APIKeyFile, &c.Anthropic.APIKey},
 	}
-	if strings.TrimSpace(c.SQLitePath) == "" {
-		return fmt.Errorf("SQLITE_PATH must not be empty")
-	}
-	switch c.Provider {
-	case "openai":
-		if strings.TrimSpace(c.OpenAI.Model) == "" {
-			return fmt.Errorf("OPENAI_MODEL must be set explicitly")
+
+	for _, source := range sources {
+		if strings.TrimSpace(source.path) == "" {
+			continue
 		}
-		if c.OpenAI.MaxOutputTokens < 16 {
-			return fmt.Errorf("OPENAI_MAX_OUTPUT_TOKENS must be at least 16")
+		secret, err := ReadSecretFile(source.path)
+		if err != nil {
+			return fmt.Errorf("%s: %w", source.variable, err)
 		}
-		if c.OpenAI.Timeout <= 0 {
-			return fmt.Errorf("OPENAI_TIMEOUT_SECONDS must be positive")
-		}
-	case "anthropic":
-		if strings.TrimSpace(c.Anthropic.Model) == "" {
-			return fmt.Errorf("ANTHROPIC_MODEL must be set explicitly")
-		}
-		if c.Anthropic.MaxOutputTokens < 16 {
-			return fmt.Errorf("ANTHROPIC_MAX_OUTPUT_TOKENS must be at least 16")
-		}
-		if c.Anthropic.Timeout <= 0 {
-			return fmt.Errorf("ANTHROPIC_TIMEOUT_SECONDS must be positive")
-		}
-	default:
-		return fmt.Errorf("AI_PROVIDER must be one of openai, anthropic")
+		*source.target = secret
 	}
 	return nil
 }
 
+// Validate checks the settings the selected provider needs. Settings for the
+// other provider are left alone.
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.ServerAddr) == "" {
+		return errors.New("SERVER_ADDR must not be empty")
+	}
+	if strings.TrimSpace(c.SQLitePath) == "" {
+		return errors.New("SQLITE_PATH must not be empty")
+	}
+
+	switch c.Provider {
+	case ProviderOpenAI:
+		return validateProvider("OPENAI", c.OpenAI.Model, c.OpenAI.MaxOutputTokens, c.OpenAI.Timeout)
+	case ProviderAnthropic:
+		return validateProvider("ANTHROPIC", c.Anthropic.Model, c.Anthropic.MaxOutputTokens, c.Anthropic.Timeout)
+	default:
+		return fmt.Errorf("AI_PROVIDER must be one of %s, %s", ProviderOpenAI, ProviderAnthropic)
+	}
+}
+
+// validateProvider applies the same rules to every provider block, named by
+// the operator-facing variable prefix.
+func validateProvider(prefix, model string, maxOutputTokens int, timeout time.Duration) error {
+	if strings.TrimSpace(model) == "" {
+		return fmt.Errorf("%s_MODEL must be set explicitly", prefix)
+	}
+	if maxOutputTokens < minOutputTokens {
+		return fmt.Errorf("%s_MAX_OUTPUT_TOKENS must be at least %d", prefix, minOutputTokens)
+	}
+	if timeout <= 0 {
+		return fmt.Errorf("%s_TIMEOUT_SECONDS must be positive", prefix)
+	}
+	return nil
+}
+
+// SelectedModel reports the model the selected provider will use.
 func (c Config) SelectedModel() string {
-	switch c.Provider {
-	case "anthropic":
+	if c.Provider == ProviderAnthropic {
 		return c.Anthropic.Model
-	default:
-		return c.OpenAI.Model
 	}
+	return c.OpenAI.Model
 }
 
+// SelectedMaxOutputTokens reports the output cap for the selected provider.
 func (c Config) SelectedMaxOutputTokens() int {
-	switch c.Provider {
-	case "anthropic":
+	if c.Provider == ProviderAnthropic {
 		return c.Anthropic.MaxOutputTokens
-	default:
-		return c.OpenAI.MaxOutputTokens
 	}
+	return c.OpenAI.MaxOutputTokens
 }
 
+// SelectedTimeout reports the provider HTTP timeout for the selected
+// provider.
+func (c Config) SelectedTimeout() time.Duration {
+	if c.Provider == ProviderAnthropic {
+		return c.Anthropic.Timeout
+	}
+	return c.OpenAI.Timeout
+}
+
+// SecretValues returns every credential in the configuration, for redaction
+// before anything is logged or stored. Blank entries are harmless: redaction
+// ignores short values.
 func (c Config) SecretValues() []string {
 	return []string{c.OpenAI.APIKey, c.Anthropic.APIKey}
 }
 
-func envString(key, fallback string) string {
+// envReader reads environment variables and accumulates parse failures so
+// that Load can report all of them at once.
+type envReader struct {
+	errs []error
+}
+
+func (r *envReader) str(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
 		return fallback
@@ -189,30 +296,42 @@ func envString(key, fallback string) string {
 	return value
 }
 
-func envInt(key string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
+func (r *envReader) intVal(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
 		return fallback
 	}
-	parsed, err := strconv.Atoi(value)
+	parsed, err := strconv.Atoi(raw)
 	if err != nil {
+		r.errs = append(r.errs, fmt.Errorf("%s must be a whole number, got %q", key, raw))
 		return fallback
 	}
 	return parsed
 }
 
-func envBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
+func (r *envReader) boolVal(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
 		return fallback
 	}
-	parsed, err := strconv.ParseBool(value)
+	parsed, err := strconv.ParseBool(raw)
 	if err != nil {
+		r.errs = append(r.errs, fmt.Errorf("%s must be true or false, got %q", key, raw))
 		return fallback
 	}
 	return parsed
 }
 
+func (r *envReader) seconds(key string, fallback int) time.Duration {
+	return time.Duration(r.intVal(key, fallback)) * time.Second
+}
+
+func (r *envReader) err() error {
+	return errors.Join(r.errs...)
+}
+
+// parseDotEnvValue unquotes a .env value, honouring Go-style escapes inside
+// double quotes and treating single quotes as literal.
 func parseDotEnvValue(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) < 2 {
@@ -227,12 +346,21 @@ func parseDotEnvValue(value string) string {
 	return value
 }
 
+// ReadSecretFile reads exactly one secret from path.
+//
+// It tolerates the shapes secret files arrive in: a bare value, a KEY=value
+// line, or a KEY: value line, with comments and blank lines ignored. More
+// than one value is an error rather than a guess, because picking the wrong
+// line would authenticate as the wrong identity.
 func ReadSecretFile(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() {
+		// Read-only handle; a close failure cannot lose data.
+		_ = file.Close()
+	}()
 
 	var values []string
 	scanner := bufio.NewScanner(file)
@@ -249,14 +377,16 @@ func ReadSecretFile(path string) (string, error) {
 		return "", err
 	}
 	if len(values) == 0 {
-		return "", fmt.Errorf("file contains no secret value")
+		return "", errors.New("file contains no secret value")
 	}
 	if len(values) > 1 {
-		return "", fmt.Errorf("file must contain exactly one non-comment secret value")
+		return "", errors.New("file must contain exactly one non-comment secret value")
 	}
 	return values[0], nil
 }
 
+// secretLineValue extracts the value from a secret file line, stripping a
+// leading KEY= or KEY: prefix when one is present.
 func secretLineValue(line string) string {
 	for _, delimiter := range []string{"=", ":"} {
 		if idx := strings.Index(line, delimiter); idx > 0 {
@@ -269,15 +399,19 @@ func secretLineValue(line string) string {
 	return strings.Trim(strings.TrimSpace(line), `"`)
 }
 
+// isConfigLikeKey reports whether value looks like a configuration key rather
+// than part of a secret that happens to contain a delimiter.
 func isConfigLikeKey(value string) bool {
 	if value == "" {
 		return false
 	}
 	for _, r := range value {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
-			continue
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.':
+		default:
+			return false
 		}
-		return false
 	}
 	return true
 }

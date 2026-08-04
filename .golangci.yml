@@ -1,0 +1,134 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    # Correctness
+    - bodyclose # HTTP response bodies must be closed
+    - durationcheck # multiplying two durations is almost always a bug
+    - errorlint # %w vs %v, errors.Is/As instead of == and type asserts
+    - makezero # make([]T, n) then append is usually a mistake
+    - nilerr # returning nil after checking err != nil
+    - noctx # HTTP requests must carry a context
+    - rowserrcheck # sql.Rows.Err() must be checked
+    - sqlclosecheck # sql.Rows/Stmt must be closed
+    - wastedassign
+
+    # Security
+    - gosec
+
+    # Style and maintainability
+    - copyloopvar
+    - goconst
+    - gocritic
+    - misspell
+    - nolintlint # a //nolint must be specific and explained
+    - revive
+    - unconvert
+    - unparam
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+
+    govet:
+      enable-all: true
+      disable:
+        # Struct field ordering is not worth the readability cost at this size.
+        - fieldalignment
+        # Flags the idiomatic `if err := x.Close(); err != nil` inside a defer
+        # as shadowing the outer err. That pattern is correct and deliberate,
+        # and the analyser is experimental for exactly this reason.
+        - shadow
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # Conflicts with the explicit if/else style used for readability here.
+        - ifElseChain
+      settings:
+        hugeParam:
+          # Default is 80 bytes. The request and interaction structs sit
+          # around 200, and this service handles one request per spoken
+          # command, so the copy is free in context. Passing them by pointer
+          # would trade nothing for aliasing bugs in code that currently
+          # cannot have them.
+          sizeThreshold: 320
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+      ignore-tests: true
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: early-return
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
+
+  exclusions:
+    generated: lax
+    rules:
+      # Tests may take shortcuts that production code may not.
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
+          - goconst
+
+      # Reading a secret from an operator-supplied path is the documented
+      # purpose of this function, not an accidental file inclusion.
+      - path: internal/config/config\.go
+        text: "G304"
+        linters:
+          - gosec
+
+      # The provider base URL is operator configuration, deliberately
+      # overridable for OpenAI-compatible and Anthropic-compatible endpoints.
+      - path: internal/providers/
+        text: "G107"
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/wellivea1/alexa-brainslug

@@ -11,7 +11,7 @@ func (mockProvider) Name() string {
 	return "mock"
 }
 
-func (mockProvider) Ask(ctx context.Context, req Request) (Response, error) {
+func (mockProvider) Ask(_ context.Context, req Request) (Response, error) {
 	return Response{
 		ShortAnswer:  "short",
 		FullAnswer:   "full",

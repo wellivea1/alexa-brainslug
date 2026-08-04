@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"alexa-brainslug/internal/config"
+	"github.com/wellivea1/alexa-brainslug/internal/config"
 )
 
 func TestAnthropicAsk(t *testing.T) {
@@ -63,7 +63,7 @@ func TestAnthropicAsk(t *testing.T) {
 }
 
 func TestAnthropicAskRedactsAPIKeyInError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(anthropicResponse{
 			Error: anthropicError{Message: "bad key test-key"},

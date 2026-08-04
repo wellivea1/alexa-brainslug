@@ -1,67 +1,87 @@
+// Package web serves the local development dashboard.
+//
+// This is a debugging surface, not a product surface: voice is the only
+// intended interface. It has no authentication and it renders every prompt
+// and answer the gateway has handled, so it must never be routed publicly.
+// See docs/security.md.
 package web
 
 import (
 	"context"
 	"encoding/json"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
-	"alexa-brainslug/internal/store"
+	"github.com/wellivea1/alexa-brainslug/internal/store"
 )
 
+// defaultLimit is how many interactions are shown when none is requested.
+const defaultLimit = 25
+
+// Store is the slice of the history store the dashboard needs.
 type Store interface {
 	ListRecent(ctx context.Context, limit int) ([]store.Interaction, error)
 }
 
+// Dashboard renders recent interactions as HTML and JSON.
 type Dashboard struct {
 	store Store
 }
 
-func NewDashboard(store Store) *Dashboard {
-	return &Dashboard{store: store}
+// NewDashboard builds a dashboard over the given history store.
+func NewDashboard(history Store) *Dashboard {
+	return &Dashboard{store: history}
 }
 
+// HandleIndex renders the HTML dashboard.
+//
+// Stored text reaches the page through html/template, which escapes it. That
+// matters more than it looks: prompts and answers are attacker-influenced
+// text, since anything the user says to Alexa ends up here.
 func (d *Dashboard) HandleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	interactions, err := d.store.ListRecent(r.Context(), 25)
+	interactions, err := d.store.ListRecent(r.Context(), defaultLimit)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "load dashboard history", "error", err)
 		http.Error(w, "could not load history", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = dashboardTemplate.Execute(w, map[string]any{
+	if err := dashboardTemplate.Execute(w, map[string]any{
 		"Interactions": interactions,
 		"GeneratedAt":  time.Now().UTC(),
-	})
+	}); err != nil {
+		// Output has already started, so this cannot become an error page.
+		slog.ErrorContext(r.Context(), "render dashboard", "error", err)
+	}
 }
 
+// HandleHistory serves recent interactions as JSON.
+//
+// An unparseable limit falls back to the default rather than erroring: this
+// is a debugging endpoint, and the store clamps the value regardless.
 func (d *Dashboard) HandleHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	limit := 25
-	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
-		if parsed, err := strconv.Atoi(rawLimit); err == nil {
+	limit := defaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
 			limit = parsed
 		}
 	}
+
 	interactions, err := d.store.ListRecent(r.Context(), limit)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "load history", "error", err)
 		http.Error(w, "could not load history", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"interactions": interactions})
+	if err := json.NewEncoder(w).Encode(map[string]any{"interactions": interactions}); err != nil {
+		slog.ErrorContext(r.Context(), "encode history", "error", err)
+	}
 }
 
 var dashboardTemplate = template.Must(template.New("dashboard").Funcs(template.FuncMap{

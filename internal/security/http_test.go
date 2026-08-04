@@ -8,12 +8,12 @@ import (
 )
 
 func TestHeadersSetHardeningHeaders(t *testing.T) {
-	handler := Headers("https://brain-slug.example.com", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Headers("https://brain-slug.example.com", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody))
 
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("missing nosniff header")
@@ -27,11 +27,11 @@ func TestHeadersSetHardeningHeaders(t *testing.T) {
 }
 
 func TestLimitRequestBodyRejectsLargePost(t *testing.T) {
-	handler := LimitRequestBody(4, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := LimitRequestBody(4, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	req := httptest.NewRequest(http.MethodPost, "/alexa", strings.NewReader("12345"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alexa", strings.NewReader("12345"))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

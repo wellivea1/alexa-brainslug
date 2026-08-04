@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a toolchain release cannot change what CI checks without a
+  # commit that says so.
+  GO_VERSION: "1.26"
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # The race detector needs cgo, which is available on the Linux runner
+      # but not on a stock Windows development machine. CI is where this
+      # actually gets checked.
+      - name: Test
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Report coverage
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      # golangci-lint is pinned as a tool dependency in go.mod, so CI and a
+      # developer machine run the same version without a separate install
+      # step or a version to keep in sync.
+      - name: Lint
+        run: go tool golangci-lint run ./...
+
+      - name: Check formatting
+        run: |
+          go tool golangci-lint fmt ./...
+          git diff --exit-code
+
+      # The repository is deliberately ASCII-only. Smart quotes and dashes
+      # pasted from a browser render badly in terminals and diffs, and in
+      # spoken output they reach a text-to-speech voice.
+      - name: Check for non-ASCII characters
+        run: |
+          if grep -rn -P '[^\x00-\x7F]' \
+            --include='*.go' --include='*.md' --include='*.json' \
+            --include='*.yml' --include='*.yaml' --include='*.example' .; then
+            echo "::error::Non-ASCII characters found. Replace them with ASCII equivalents."
+            exit 1
+          fi
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build image
+        run: docker build --tag alexa-brainslug:ci .
+
+      # A container that cannot start is a deployment that cannot start. This
+      # catches the class of bug where the image and the compose environment
+      # disagree about where the database lives.
+      - name: Verify the container starts and serves health
+        run: |
+          docker run --detach --name brainslug-ci \
+            --env OPENAI_API_KEY=ci-placeholder-key \
+            --env OPENAI_MODEL=gpt-5-mini \
+            --publish 8080:8080 \
+            alexa-brainslug:ci
+
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/health; then
+              echo
+              echo "health endpoint responded"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "::error::The container did not become healthy."
+          docker logs brainslug-ci
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs brainslug-ci || true
