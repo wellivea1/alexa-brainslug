@@ -37,6 +37,7 @@ const (
 	speechFallback     = "I did not catch the question. Say ask, followed by what you want to know."
 	speechUnknownType  = "I did not recognize that Alexa request."
 	speechUnknownName  = "I do not know how to handle that request yet."
+	speechUnknownUser  = "I could not identify this Alexa account."
 	speechNoIntent     = "I did not catch the intent."
 	speechNoHistory    = "I do not have a previous response for you yet."
 	speechHistoryError = "I could not read the local history right now."
@@ -157,8 +158,12 @@ func (h *Handler) handleAskGPT(ctx context.Context, envelope *RequestEnvelope) R
 		return NewTell(speechProviderMisconfig)
 	}
 
+	principal := principalForEnvelope(envelope)
+	if !principal.Valid() {
+		return NewTell(speechUnknownUser)
+	}
 	answer, err := h.application.Ask(ctx, app.AskRequest{
-		Principal:      principalForEnvelope(envelope),
+		Principal:      principal,
 		ConversationID: envelope.SessionID(),
 		Prompt:         query,
 	})
@@ -176,6 +181,8 @@ func (h *Handler) handleAskGPT(ctx context.Context, envelope *RequestEnvelope) R
 
 func speechForApplicationError(err error) string {
 	switch {
+	case errors.Is(err, app.ErrInvalidPrincipal):
+		return speechUnknownUser
 	case errors.Is(err, app.ErrProviderNotConfigured):
 		return speechProviderMisconfig
 	case errors.Is(err, app.ErrProviderNoText):
@@ -192,7 +199,11 @@ func (h *Handler) handleLastResponse(ctx context.Context, envelope *RequestEnvel
 		return NewTell(speechNoHistory)
 	}
 
-	answer, err := h.application.LatestAnswer(ctx, principalForEnvelope(envelope))
+	principal := principalForEnvelope(envelope)
+	if !principal.Valid() {
+		return NewTell(speechUnknownUser)
+	}
+	answer, err := h.application.LatestAnswer(ctx, principal)
 	if err != nil {
 		switch {
 		case errors.Is(err, app.ErrNoHistory):
