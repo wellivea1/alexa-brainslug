@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{{.PageTitle}} · Brainslug</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=4">
+  <link rel="stylesheet" href="/assets/dashboard.css?v=5">
 </head>
 <body>
   <div class="app-shell">
@@ -233,6 +233,13 @@
                     <label for="openai-auth-api"><strong>OpenAI API key</strong><small>Official OpenAI API</small></label>
                     <span class="connection-state {{if .Inference.OpenAI.APIKeyConfigured}}text-ok{{else}}text-warn{{end}}">{{.Inference.OpenAI.APIKeySource}}</span>
                   </div>
+                  <div class="api-key-editor">
+                    <label class="field" for="openai-api-key"><span>API key</span><span class="field-control"><input id="openai-api-key" type="password" name="api_key" placeholder="Paste a new API key" autocomplete="new-password"><small>The saved value is never displayed again.</small></span></label>
+                    <span class="auth-actions">
+                      <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/provider/api-key">Save key</button>
+                      {{if .Inference.OpenAI.ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
+                    </span>
+                  </div>
                   <div class="auth-choice {{if eq .Inference.OpenAI.AuthMode "chatgpt"}}is-selected{{end}}">
                     <input id="openai-auth-chatgpt" type="radio" name="auth_mode" value="chatgpt" {{if eq .Inference.OpenAI.AuthMode "chatgpt"}}checked{{end}}>
                     <label for="openai-auth-chatgpt"><strong>ChatGPT account</strong><small>Plus / Pro account · Codex connector</small></label>
@@ -281,15 +288,28 @@
               <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
               <input type="hidden" name="section" value="inference">
               <input type="hidden" name="provider" value="anthropic">
-              <div class="form-grid">
-                <label class="field"><span>Model</span><input name="model" value="{{.Inference.Anthropic.Model}}" placeholder="claude-model-id" required autocomplete="off"><small>Use the exact API model ID enabled for your account.</small></label>
-                <label class="field"><span>Base URL</span><input type="url" name="base_url" value="{{.Inference.Anthropic.BaseURL}}" placeholder="https://api.anthropic.com/v1"><small>Leave blank for the official Anthropic endpoint.</small></label>
-              </div>
+              <section class="form-section" aria-labelledby="anthropic-auth-title">
+                <header class="form-section-head"><div><strong id="anthropic-auth-title">Authentication</strong><small>Direct Claude API access.</small></div></header>
+                <div class="api-key-editor">
+                  <label class="field" for="anthropic-api-key"><span>Anthropic API key</span><span class="field-control"><input id="anthropic-api-key" type="password" name="api_key" placeholder="Paste a new API key" autocomplete="new-password"><small>{{.Inference.Anthropic.CredentialSource}} · the saved value is never displayed again.</small></span></label>
+                  <span class="auth-actions">
+                    <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/provider/api-key">Save key</button>
+                    {{if .Inference.Anthropic.ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
+                  </span>
+                </div>
+              </section>
+              <section class="form-section" aria-labelledby="anthropic-model-title">
+                <header class="form-section-head"><div><strong id="anthropic-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
+                <div class="form-rows">
+                  <label class="field"><span>Model</span><span class="field-control"><input name="model" value="{{.Inference.Anthropic.Model}}" placeholder="claude-model-id" required autocomplete="off"><small>Use the exact API model ID enabled for your account.</small></span></label>
+                  <label class="field"><span>Base URL</span><span class="field-control"><input type="url" name="base_url" value="{{.Inference.Anthropic.BaseURL}}" placeholder="https://api.anthropic.com/v1"><small>Leave blank for the official Anthropic endpoint.</small></span></label>
+                </div>
+              </section>
               <details class="advanced-settings">
                 <summary>Request settings</summary>
-                <div class="advanced-grid">
-                  <label class="field"><span>Maximum output tokens</span><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.Anthropic.MaxOutputTokens}}" required></label>
-                  <label class="field"><span>Timeout in seconds</span><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.Anthropic.TimeoutSeconds}}" required></label>
+                <div class="form-rows advanced-grid">
+                  <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.Anthropic.MaxOutputTokens}}" required></span></label>
+                  <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.Anthropic.TimeoutSeconds}}" required></span></label>
                 </div>
               </details>
               <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.Anthropic.Active}}Save settings{{else}}Use Anthropic{{end}}</button></div>

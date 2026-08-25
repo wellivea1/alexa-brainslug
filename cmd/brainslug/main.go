@@ -20,6 +20,7 @@ import (
 	"github.com/wellivea1/alexa-brainslug/internal/config"
 	"github.com/wellivea1/alexa-brainslug/internal/inference"
 	"github.com/wellivea1/alexa-brainslug/internal/openauth"
+	"github.com/wellivea1/alexa-brainslug/internal/providerauth"
 	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
@@ -115,6 +116,13 @@ func run() error {
 	providerManager, err := inference.NewManager(&cfg, application, openAIAuth)
 	if err != nil {
 		return fmt.Errorf("configure inference manager: %w", err)
+	}
+	providerAuth, err := providerauth.New(cfg.ProviderAuthFile)
+	if err != nil {
+		return fmt.Errorf("configure provider credentials: %w", err)
+	}
+	if err := providerManager.AttachAPIKeyStore(providerAuth); err != nil {
+		return fmt.Errorf("apply provider credentials: %w", err)
 	}
 	alexaHandler := alexa.NewHandler(alexa.Options{
 		Verification: alexa.VerificationConfig{
@@ -222,6 +230,8 @@ func buildAdminHandler(cfg *config.Config, controller web.InferenceController, d
 	mux.HandleFunc("GET /history", dashboard.HandleHistory)
 	mux.HandleFunc("GET /assets/dashboard.css", dashboard.HandleStyles)
 	mux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
+	mux.HandleFunc("POST /auth/provider/api-key", dashboard.HandleAPIKeySave)
+	mux.HandleFunc("POST /auth/provider/api-key/remove", dashboard.HandleAPIKeyRemove)
 	mux.HandleFunc("POST /auth/openai/browser", dashboard.HandleOpenAIBrowserStart)
 	mux.HandleFunc("POST /auth/openai/device/start", dashboard.HandleOpenAIDeviceStart)
 	mux.HandleFunc("POST /auth/openai/device/poll", dashboard.HandleOpenAIDevicePoll)

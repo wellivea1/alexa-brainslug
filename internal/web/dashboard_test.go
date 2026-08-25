@@ -23,10 +23,13 @@ type fakeStore struct {
 }
 
 type fakeInferenceController struct {
-	snapshot inference.Snapshot
-	update   inference.Update
-	authMode string
-	err      error
+	snapshot    inference.Snapshot
+	update      inference.Update
+	authMode    string
+	keyProvider string
+	keyValue    string
+	clearedKey  string
+	err         error
 }
 
 func (f *fakeInferenceController) Snapshot() inference.Snapshot { return f.snapshot }
@@ -37,6 +40,17 @@ func (f *fakeInferenceController) Update(update inference.Update) error {
 
 func (f *fakeInferenceController) SetOpenAIAuthMode(mode string) error {
 	f.authMode = mode
+	return f.err
+}
+
+func (f *fakeInferenceController) SetAPIKey(provider, key string) error {
+	f.keyProvider = provider
+	f.keyValue = key
+	return f.err
+}
+
+func (f *fakeInferenceController) ClearAPIKey(provider string) error {
+	f.clearedKey = provider
 	return f.err
 }
 
@@ -302,6 +316,60 @@ func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
 	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	badRec := httptest.NewRecorder()
 	dashboard.HandleProviderUpdate(badRec, bad)
+	if badRec.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status = %d", badRec.Code)
+	}
+}
+
+func TestProviderAPIKeyControlsAreMaskedAndProtected(t *testing.T) {
+	controller := &fakeInferenceController{snapshot: inference.Snapshot{
+		ActiveProvider: "openai",
+		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI / compatible", Model: "gpt-test"},
+		Anthropic: inference.ProviderState{
+			ID: "anthropic", Name: "Anthropic", Model: "claude-test", ManagedAPIKey: true,
+			CredentialConfigured: true, CredentialSource: "Saved locally",
+		},
+	}}
+	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, CSRFToken: "test-token"})
+	rec := httptest.NewRecorder()
+	dashboard.HandleIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?section=inference&provider=anthropic", http.NoBody))
+	body := rec.Body.String()
+	for _, want := range []string{`type="password"`, `action="/settings/provider"`, `formaction="/auth/provider/api-key"`, "Remove saved key", "Saved locally"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Anthropic credential UI is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "sk-ant-secret") {
+		t.Fatal("dashboard rendered an API key")
+	}
+
+	form := url.Values{"csrf_token": {"test-token"}, "provider": {"anthropic"}, "api_key": {"sk-ant-secret"}}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/provider/api-key", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://127.0.0.1:8081")
+	req.Host = "127.0.0.1:8081"
+	rec = httptest.NewRecorder()
+	dashboard.HandleAPIKeySave(rec, req)
+	if rec.Code != http.StatusSeeOther || controller.keyProvider != "anthropic" || controller.keyValue != "sk-ant-secret" {
+		t.Fatalf("save key = status %d, provider %q", rec.Code, controller.keyProvider)
+	}
+	if strings.Contains(rec.Body.String(), "sk-ant-secret") || strings.Contains(rec.Header().Get("Location"), "sk-ant-secret") {
+		t.Fatal("save response exposed the API key")
+	}
+
+	remove := url.Values{"csrf_token": {"test-token"}, "provider": {"anthropic"}}
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/provider/api-key/remove", strings.NewReader(remove.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	dashboard.HandleAPIKeyRemove(rec, req)
+	if rec.Code != http.StatusSeeOther || controller.clearedKey != "anthropic" {
+		t.Fatalf("remove key = status %d, provider %q", rec.Code, controller.clearedKey)
+	}
+
+	bad := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/provider/api-key", strings.NewReader("provider=anthropic&api_key=secret"))
+	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	badRec := httptest.NewRecorder()
+	dashboard.HandleAPIKeySave(badRec, bad)
 	if badRec.Code != http.StatusForbidden {
 		t.Fatalf("missing CSRF status = %d", badRec.Code)
 	}

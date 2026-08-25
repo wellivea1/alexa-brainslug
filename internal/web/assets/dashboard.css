@@ -470,6 +470,18 @@ details p { white-space: pre-wrap; }
 .connection-state { min-width: 86px; text-align: right; font-size: 10px; font-weight: 700; }
 .auth-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .auth-actions .button { min-height: 30px; padding: 5px 9px; font-size: 10px; }
+.api-key-editor {
+  min-height: 70px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.auth-options .api-key-editor { padding-right: 0; padding-left: 29px; }
+.api-key-editor .field { grid-template-columns: 120px minmax(180px, 1fr); align-items: start; gap: 12px; }
+.api-key-editor .field > span:first-child { padding-top: 9px; }
 .button-danger { color: var(--bad); }
 .advanced-settings { margin: 0; border-bottom: 1px solid var(--line-strong); }
 .advanced-settings > summary { min-height: 42px; padding: 11px 16px; color: var(--ink-2); background: var(--surface); font-size: 11px; }
@@ -557,6 +569,10 @@ details p { white-space: pre-wrap; }
   .auth-choice { grid-template-columns: 20px minmax(0, 1fr) auto; }
   .auth-choice > label { min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
   .auth-choice .auth-actions { grid-column: 2 / -1; justify-content: flex-start; }
+  .api-key-editor, .auth-options .api-key-editor { padding: 10px 0; grid-template-columns: 1fr; }
+  .api-key-editor .field { grid-template-columns: 1fr; gap: 3px; }
+  .api-key-editor .field > span:first-child { padding-top: 0; }
+  .api-key-editor .auth-actions { justify-content: flex-start; flex-wrap: wrap; }
   .auth-actions .button, .dialog-actions .button { min-height: 44px; }
   .dialog-actions, .dialog-actions form { width: 100%; }
   .dialog-actions .button { width: 100%; }

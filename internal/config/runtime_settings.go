@@ -10,11 +10,15 @@ import (
 	"time"
 )
 
-const runtimeSettingsVersion = 1
+const (
+	runtimeSettingsVersion = 1
+	inMemorySQLitePath     = ":memory:"
+)
 
 // RuntimeSettings is the non-secret inference configuration managed by the
-// local dashboard. API keys are deliberately absent: credentials continue to
-// come from environment variables or explicitly configured secret files.
+// local dashboard. API keys are deliberately absent: they live in the
+// dedicated provider auth file, environment variables, or explicit secret
+// files.
 type RuntimeSettings struct {
 	Version   int                     `json:"version"`
 	Provider  string                  `json:"provider"`
@@ -148,7 +152,7 @@ func resolveRuntimeSettingsPath(configured, sqlitePath string) string {
 		return configured
 	}
 	sqlitePath = strings.TrimSpace(sqlitePath)
-	if sqlitePath == "" || sqlitePath == ":memory:" || strings.HasPrefix(sqlitePath, "file:") {
+	if sqlitePath == "" || sqlitePath == inMemorySQLitePath || strings.HasPrefix(sqlitePath, "file:") {
 		return ""
 	}
 	extension := filepath.Ext(sqlitePath)
@@ -161,7 +165,7 @@ func resolveOpenAIAuthPath(configured, sqlitePath string) string {
 		return path
 	}
 	databasePath := strings.TrimSpace(sqlitePath)
-	if databasePath == "" || databasePath == ":memory:" || strings.HasPrefix(databasePath, "file:") {
+	if databasePath == "" || databasePath == inMemorySQLitePath || strings.HasPrefix(databasePath, "file:") {
 		return ""
 	}
 	extension := filepath.Ext(databasePath)
@@ -170,6 +174,22 @@ func resolveOpenAIAuthPath(configured, sqlitePath string) string {
 		base = databasePath
 	}
 	return base + ".openai-auth.json"
+}
+
+func resolveProviderAuthPath(configured, sqlitePath string) string {
+	if path := strings.TrimSpace(configured); path != "" {
+		return path
+	}
+	databasePath := strings.TrimSpace(sqlitePath)
+	if databasePath == "" || databasePath == inMemorySQLitePath || strings.HasPrefix(databasePath, "file:") {
+		return ""
+	}
+	extension := filepath.Ext(databasePath)
+	base := strings.TrimSuffix(databasePath, extension)
+	if base == "" {
+		base = databasePath
+	}
+	return base + ".provider-auth.json"
 }
 
 func durationSeconds(value time.Duration) int {

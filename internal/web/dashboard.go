@@ -55,6 +55,11 @@ type InferenceController interface {
 
 type openAIAuthModeController interface{ SetOpenAIAuthMode(string) error }
 
+type apiKeyController interface {
+	SetAPIKey(provider, key string) error
+	ClearAPIKey(provider string) error
+}
+
 // OpenAIAuthController is the secret-free dashboard boundary around ChatGPT
 // login. Tokens never enter form values, query strings, or page data.
 type OpenAIAuthController interface {
@@ -175,6 +180,44 @@ func (d *Dashboard) HandleProviderUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	http.Redirect(w, r, "/?section=inference&provider="+url.QueryEscape(r.PostFormValue("provider"))+"&saved=1", http.StatusSeeOther)
+}
+
+// HandleAPIKeySave stores a provider key without ever placing it in a URL,
+// response body, template value, or log field.
+func (d *Dashboard) HandleAPIKeySave(w http.ResponseWriter, r *http.Request) {
+	if !d.authorizeMutation(w, r) {
+		return
+	}
+	controller, ok := d.inference.(apiKeyController)
+	if !ok {
+		http.Error(w, "provider credential management is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	provider := normalizedProvider(r.PostFormValue("provider"))
+	if err := controller.SetAPIKey(provider, r.PostFormValue("api_key")); err != nil {
+		d.renderIndex(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/?section=inference&provider="+url.QueryEscape(provider)+"&credential=saved", http.StatusSeeOther)
+}
+
+// HandleAPIKeyRemove deletes only a key saved through Brainslug. Environment
+// variables and explicit secret files cannot be changed from the dashboard.
+func (d *Dashboard) HandleAPIKeyRemove(w http.ResponseWriter, r *http.Request) {
+	if !d.authorizeMutation(w, r) {
+		return
+	}
+	controller, ok := d.inference.(apiKeyController)
+	if !ok {
+		http.Error(w, "provider credential management is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	provider := normalizedProvider(r.PostFormValue("provider"))
+	if err := controller.ClearAPIKey(provider); err != nil {
+		d.renderIndex(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/?section=inference&provider="+url.QueryEscape(provider)+"&credential=removed", http.StatusSeeOther)
 }
 
 // HandleOpenAIBrowserStart leaves the local dashboard for the PKCE login and
@@ -402,6 +445,12 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 	if r.URL.Query().Get("saved") == "1" {
 		data.Notice = "Inference settings saved and activated."
 	}
+	switch r.URL.Query().Get("credential") {
+	case "saved":
+		data.Notice = "API key saved locally and available to this provider."
+	case "removed":
+		data.Notice = "Locally saved API key removed."
+	}
 	switch r.URL.Query().Get("auth") {
 	case "connected":
 		if inferenceSnapshot.OpenAI.AuthMode == config.OpenAIAuthModeChatGPT {
@@ -543,10 +592,21 @@ func sectionCopy(section string) (title, description string) {
 	case sectionActivity:
 		return "Activity", "Search and inspect the latest stored Alexa questions and provider outcomes."
 	case sectionInference:
-		return "Inference", "Choose an explicit provider and model without exposing credentials to the dashboard."
+		return "Inference", "Choose an explicit provider, credential path, and model for new Alexa requests."
 	default:
 		return "Overview", "The current operating state of your private Alexa gateway."
 	}
+}
+
+func normalizedProvider(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == providerAnthropic {
+		return providerAnthropic
+	}
+	if value == providerOpenAI {
+		return providerOpenAI
+	}
+	return ""
 }
 
 func sameOrigin(r *http.Request) error {

@@ -2,6 +2,9 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +16,23 @@ import (
 )
 
 type stubProvider struct{}
+
+type memoryAPIKeyStore struct{ keys map[string]string }
+
+func (s *memoryAPIKeyStore) Get(provider string) (string, bool) {
+	key, ok := s.keys[provider]
+	return key, ok
+}
+
+func (s *memoryAPIKeyStore) Set(provider, key string) error {
+	s.keys[provider] = key
+	return nil
+}
+
+func (s *memoryAPIKeyStore) Remove(provider string) error {
+	delete(s.keys, provider)
+	return nil
+}
 
 type stubChatGPTCredentials struct{ connected bool }
 
@@ -136,6 +156,67 @@ func TestManagerSelectsOnlyConnectedChatGPTAccount(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("disconnected Update() error = %v", err)
+	}
+}
+
+func TestManagedAnthropicAPIKeyReachesOfficialMessagesTransport(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("Anthropic path = %q", r.URL.Path)
+		}
+		if r.Header.Get("x-api-key") != "sk-ant-managed" {
+			t.Errorf("Anthropic API key header was not supplied")
+		}
+		if r.Header.Get("anthropic-version") != "2023-06-01" {
+			t.Errorf("Anthropic version = %q", r.Header.Get("anthropic-version"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "claude-test", "content": []map[string]string{{"type": "text", "text": "Managed key works."}},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	cfg := testConfig(settingsPath)
+	cfg.Anthropic.APIKey = ""
+	service := app.NewService(app.Options{Model: cfg.OpenAI.Model}, stubProvider{}, nil)
+	manager, err := NewManager(&cfg, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := &memoryAPIKeyStore{keys: make(map[string]string)}
+	if err := manager.AttachAPIKeyStore(credentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetAPIKey(config.ProviderAnthropic, "sk-ant-managed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Update(Update{
+		Provider: config.ProviderAnthropic, Model: "claude-test", BaseURL: server.URL + "/v1",
+		MaxOutputTokens: 128, TimeoutSeconds: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	answer, err := service.Ask(t.Context(), app.AskRequest{
+		Principal: app.Principal{Namespace: "test", Subject: "managed-key"}, Prompt: "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.FullAnswer != "Managed key works." {
+		t.Fatalf("answer = %#v", answer)
+	}
+	snapshot := manager.Snapshot().Anthropic
+	if !snapshot.ManagedAPIKey || snapshot.CredentialSource != "Saved locally" {
+		t.Fatalf("managed credential state = %#v", snapshot)
+	}
+
+	if err := manager.ClearAPIKey(config.ProviderAnthropic); err != nil {
+		t.Fatal(err)
+	}
+	if state := manager.Snapshot().Anthropic; state.CredentialConfigured || state.ManagedAPIKey {
+		t.Fatalf("cleared credential state = %#v", state)
 	}
 }
 

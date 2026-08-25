@@ -171,6 +171,10 @@ func TestRuntimeSettingsSelectChatGPTAndDerivePrivateCredentialPath(t *testing.T
 	if cfg.OpenAI.ChatGPTAuthFile != wantAuthPath {
 		t.Fatalf("ChatGPTAuthFile = %q, want %q", cfg.OpenAI.ChatGPTAuthFile, wantAuthPath)
 	}
+	wantProviderAuthPath := filepath.Join(directory, "brainslug.provider-auth.json")
+	if cfg.ProviderAuthFile != wantProviderAuthPath {
+		t.Fatalf("ProviderAuthFile = %q, want %q", cfg.ProviderAuthFile, wantProviderAuthPath)
+	}
 }
 
 func TestValidateRejectsUnknownOpenAIResponseControls(t *testing.T) {

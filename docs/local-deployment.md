@@ -85,9 +85,12 @@ http://127.0.0.1:8081/history
 Use the Inference page to change the explicit provider, model, endpoint, token
 cap, timeout, and supported OpenAI reasoning/text controls without restarting.
 Non-secret settings persist beside SQLite by default; override the location
-with `RUNTIME_SETTINGS_PATH`. API keys still come only from environment
-variables or secret files and are never entered into or displayed by the
-dashboard. The OpenAI provider also offers an explicit ChatGPT account mode.
+with `RUNTIME_SETTINGS_PATH`. Each provider tab also accepts a masked API key.
+The saved value is never displayed again and persists in
+`brainslug.provider-auth.json` beside SQLite by default; override its location
+with `PROVIDER_AUTH_FILE`. Environment variables and explicit secret files
+remain supported. The OpenAI provider also offers an explicit ChatGPT account
+mode.
 
 For a native local process, **Connect** uses browser PKCE and a temporary
 loopback callback on port `1455`. It needs no router, firewall, tunnel, or
@@ -96,6 +99,10 @@ in the browser cannot reach the process—use **Use code** instead. The code flo
 requires only outbound HTTPS and the existing loopback dashboard. Connected
 tokens default to `/data/brainslug.openai-auth.json` in Docker because the
 SQLite directory is the writable persistent volume.
+
+Dashboard-managed API keys similarly default to
+`/data/brainslug.provider-auth.json` in Docker. Neither credential file needs
+port forwarding; both are consumed only by the local process.
 
 The public port should return 404 for those paths:
 

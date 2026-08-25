@@ -69,9 +69,13 @@ type Config struct {
 	SQLitePath string
 
 	// RuntimeSettingsPath stores dashboard-managed, non-secret inference
-	// settings. Credentials always remain in environment variables or secret
-	// files and are never written here.
+	// settings. Credentials are never written here.
 	RuntimeSettingsPath string
+
+	// ProviderAuthFile is the private local file used for API keys entered in
+	// the loopback dashboard. Environment variables and explicit *_FILE
+	// secrets are still supported independently.
+	ProviderAuthFile string
 
 	// AlexaVerifyRequests gates Alexa request signature verification. It
 	// defaults to true and fails closed.
@@ -191,6 +195,7 @@ func Load() (Config, error) {
 		},
 		SQLitePath:          env.str("SQLITE_PATH", defaultSQLitePath),
 		RuntimeSettingsPath: env.str("RUNTIME_SETTINGS_PATH", ""),
+		ProviderAuthFile:    env.str("PROVIDER_AUTH_FILE", ""),
 		AlexaVerifyRequests: env.boolVal("ALEXA_VERIFY_REQUESTS", true),
 		AlexaAllowedSkillID: env.str("ALEXA_ALLOWED_SKILL_ID", ""),
 		LogLevel:            env.str("LOG_LEVEL", defaultLogLevel),
@@ -204,6 +209,7 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.OpenAI.ChatGPTAuthFile = resolveOpenAIAuthPath(cfg.OpenAI.ChatGPTAuthFile, cfg.SQLitePath)
+	cfg.ProviderAuthFile = resolveProviderAuthPath(cfg.ProviderAuthFile, cfg.SQLitePath)
 
 	if err := cfg.loadSecretFiles(); err != nil {
 		return Config{}, err

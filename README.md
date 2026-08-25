@@ -226,19 +226,29 @@ timeout, reasoning effort, and text verbosity changes take effect immediately
 and persist in `brainslug.settings.json` beside the SQLite database by default.
 Set `RUNTIME_SETTINGS_PATH` to choose another location.
 
-The runtime settings file never contains provider credentials. API keys still
-come from `OPENAI_API_KEY`, `OPENAI_API_KEY_FILE`, `ANTHROPIC_API_KEY`, or
-`ANTHROPIC_API_KEY_FILE`. A connected ChatGPT account is stored separately in
+The runtime settings file never contains provider credentials. A masked API-key
+field in each provider tab can save a key locally without displaying it again.
+Those keys live in `brainslug.provider-auth.json` beside SQLite by default, or
+at `PROVIDER_AUTH_FILE`, with owner-only permissions where the platform
+supports them. A saved local key takes precedence while present; removing it
+reveals any `OPENAI_API_KEY`, `OPENAI_API_KEY_FILE`, `ANTHROPIC_API_KEY`, or
+`ANTHROPIC_API_KEY_FILE` value loaded at startup.
+
+A connected ChatGPT account is stored separately in
 `brainslug.openai-auth.json` beside SQLite by default, or at
 `OPENAI_CHATGPT_AUTH_FILE`. That file contains refreshable bearer credentials;
-keep it private and never commit or copy it casually. The dashboard exposes
-only connection state and a generic credential source.
+keep both auth files private and never commit or copy them casually. The
+dashboard exposes only connection state and a generic credential source.
 
 The model manager keeps OpenAI-compatible and Anthropic configuration in one
 panel with a provider tab for each. Provider and model selection stay
 explicit: Brainslug never guesses, falls back, or silently substitutes a
 different model. A custom OpenAI base URL is labeled as compatible rather than
 official OpenAI.
+
+Anthropic uses the direct Claude Messages API at `POST /v1/messages` with an
+Anthropic Console API key. Brainslug does not repurpose a Claude Pro or Max
+subscription login as an API credential.
 
 The OpenAI model suggestions were reviewed against the official catalog on
 August 25, 2026 and include `gpt-5.6-sol`, `gpt-5.6-terra`, and

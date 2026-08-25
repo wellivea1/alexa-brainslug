@@ -170,6 +170,7 @@ OPENAI_API_KEY
 OPENAI_API_KEY_FILE
 ANTHROPIC_API_KEY
 ANTHROPIC_API_KEY_FILE
+PROVIDER_AUTH_FILE
 OPENAI_CHATGPT_AUTH_FILE
 ```
 
@@ -180,6 +181,14 @@ Requirements:
 - do not print configuration structs containing secret values;
 - redact provider diagnostics before persistence or logs;
 - rotate a key after suspected exposure and inspect provider usage.
+
+`PROVIDER_AUTH_FILE` is the JSON credential store written by the loopback
+dashboard's masked API-key controls. It defaults to
+`brainslug.provider-auth.json` beside SQLite, is created with owner-only file
+permissions where the platform supports them, and is ignored by Git. Saved
+keys are never rendered back into HTML, URLs, health responses, or logs.
+Removing a saved key does not edit environment variables or mounted secret
+files.
 
 `OPENAI_CHATGPT_AUTH_FILE` is different from the API-key file variables. It is
 a JSON credential store written by the local account login and contains an
