@@ -53,7 +53,10 @@ const (
 
 // ApplicationService is the platform-neutral behavior the ASK adapter needs.
 type ApplicationService interface {
+	// Ask submits one normalized question.
 	Ask(ctx context.Context, req app.AskRequest) (app.Answer, error)
+
+	// LatestAnswer returns the caller's newest saved answer.
 	LatestAnswer(ctx context.Context, principal app.Principal) (app.Answer, error)
 }
 
