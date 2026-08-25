@@ -66,17 +66,21 @@ func TestProviderPrincipalKeySeparatesNamespaces(t *testing.T) {
 
 func TestAppProviderMapsErrors(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want error
+		name      string
+		err       error
+		want      error
+		alsoWant  error
 	}{
-		{"not configured", ErrNotConfigured, app.ErrProviderNotConfigured},
-		{"empty response", ErrEmptyResponse, app.ErrProviderNoText},
-		{"deadline", context.DeadlineExceeded, app.ErrProviderUnavailable},
-		{"rate limit", &APIError{Provider: "fake", Status: 429}, app.ErrProviderUnavailable},
-		{"server error", &APIError{Provider: "fake", Status: 503}, app.ErrProviderUnavailable},
-		{"bad request", &APIError{Provider: "fake", Status: 400}, app.ErrProviderFailed},
-		{"unknown", errors.New("boom"), app.ErrProviderFailed},
+		{"not configured", ErrNotConfigured, app.ErrProviderNotConfigured, nil},
+		{"output limit", ErrOutputLimit, app.ErrProviderOutputLimit, app.ErrProviderNoText},
+		{"empty response", ErrEmptyResponse, app.ErrProviderNoText, nil},
+		{"deadline", context.DeadlineExceeded, app.ErrProviderUnavailable, nil},
+		{"incomplete", ErrIncompleteResponse, app.ErrProviderFailed, nil},
+		{"failed response", ErrFailedResponse, app.ErrProviderFailed, nil},
+		{"rate limit", &APIError{Provider: "fake", Status: 429}, app.ErrProviderUnavailable, nil},
+		{"server error", &APIError{Provider: "fake", Status: 503}, app.ErrProviderUnavailable, nil},
+		{"bad request", &APIError{Provider: "fake", Status: 400}, app.ErrProviderFailed, nil},
+		{"unknown", errors.New("boom"), app.ErrProviderFailed, nil},
 	}
 
 	for _, tt := range tests {
@@ -85,6 +89,9 @@ func TestAppProviderMapsErrors(t *testing.T) {
 			_, err := provider.Ask(t.Context(), app.ProviderRequest{})
 			if !errors.Is(err, tt.want) {
 				t.Errorf("Ask() error = %v, want %v", err, tt.want)
+			}
+			if tt.alsoWant != nil && !errors.Is(err, tt.alsoWant) {
+				t.Errorf("Ask() error = %v, also want %v", err, tt.alsoWant)
 			}
 		})
 	}
