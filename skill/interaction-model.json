@@ -12,10 +12,15 @@
             }
           ],
           "samples": [
-            "ask {Query}",
-            "send {Query}",
-            "question {Query}",
-            "ask chat g p t {Query}"
+            "about {Query}",
+            "what is {Query}",
+            "why {Query}",
+            "how {Query}",
+            "whether {Query}",
+            "explain {Query}",
+            "to explain {Query}",
+            "for {Query}",
+            "the answer to {Query}"
           ]
         },
         {
