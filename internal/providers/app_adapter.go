@@ -54,10 +54,14 @@ func mapAppError(err error) error {
 	switch {
 	case errors.Is(err, ErrNotConfigured):
 		return errors.Join(app.ErrProviderNotConfigured, err)
+	case errors.Is(err, ErrOutputLimit):
+		return errors.Join(app.ErrProviderOutputLimit, err)
 	case errors.Is(err, ErrEmptyResponse):
 		return errors.Join(app.ErrProviderNoText, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return errors.Join(app.ErrProviderUnavailable, err)
+	case errors.Is(err, ErrIncompleteResponse), errors.Is(err, ErrFailedResponse):
+		return errors.Join(app.ErrProviderFailed, err)
 	}
 
 	var apiErr *APIError
