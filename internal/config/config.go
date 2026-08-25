@@ -28,11 +28,12 @@ const (
 // Defaults applied when a variable is unset. A variable that is set but
 // unparseable is an error, never a silent fall back to these.
 const (
-	defaultServerAddr      = ":8080"
-	defaultSQLitePath      = "./brainslug.db"
-	defaultMaxOutputTokens = 600
-	defaultTimeoutSeconds  = 12
-	defaultLogLevel        = "info"
+	defaultServerAddr              = "127.0.0.1:8080"
+	defaultSQLitePath              = "./brainslug.db"
+	defaultOpenAIMaxOutputTokens   = 25000
+	defaultAnthropicMaxOutputTokens = 4096
+	defaultTimeoutSeconds          = 6
+	defaultLogLevel                = "info"
 
 	// minOutputTokens is the floor below which a response cannot hold a
 	// usable sentence.
@@ -41,7 +42,8 @@ const (
 
 // Config is the validated runtime configuration.
 type Config struct {
-	// ServerAddr is the local bind address.
+	// ServerAddr is the public ASK bind address. It defaults to host loopback;
+	// container deployments override it inside the container.
 	ServerAddr string
 
 	// PublicBaseURL is the externally reachable origin. It is reference
@@ -158,7 +160,7 @@ func Load() (Config, error) {
 			APIKeyFile:      env.str("OPENAI_API_KEY_FILE", ""),
 			Model:           env.str("OPENAI_MODEL", ""),
 			BaseURL:         env.str("OPENAI_BASE_URL", ""),
-			MaxOutputTokens: env.intVal("OPENAI_MAX_OUTPUT_TOKENS", defaultMaxOutputTokens),
+			MaxOutputTokens: env.intVal("OPENAI_MAX_OUTPUT_TOKENS", defaultOpenAIMaxOutputTokens),
 			Timeout:         env.seconds("OPENAI_TIMEOUT_SECONDS", defaultTimeoutSeconds),
 		},
 		Anthropic: AnthropicConfig{
@@ -166,7 +168,7 @@ func Load() (Config, error) {
 			APIKeyFile:      env.str("ANTHROPIC_API_KEY_FILE", ""),
 			Model:           env.str("ANTHROPIC_MODEL", ""),
 			BaseURL:         env.str("ANTHROPIC_BASE_URL", ""),
-			MaxOutputTokens: env.intVal("ANTHROPIC_MAX_OUTPUT_TOKENS", defaultMaxOutputTokens),
+			MaxOutputTokens: env.intVal("ANTHROPIC_MAX_OUTPUT_TOKENS", defaultAnthropicMaxOutputTokens),
 			Timeout:         env.seconds("ANTHROPIC_TIMEOUT_SECONDS", defaultTimeoutSeconds),
 		},
 		SQLitePath:          env.str("SQLITE_PATH", defaultSQLitePath),
