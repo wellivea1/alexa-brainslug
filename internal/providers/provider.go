@@ -42,14 +42,23 @@ var (
 	// ErrEmptyPrompt means there was nothing to ask.
 	ErrEmptyPrompt = errors.New("prompt is empty")
 
-	// ErrEmptyResponse means the provider returned a well-formed response
-	// containing no text.
-	//
-	// On reasoning models this usually means the output token cap was
-	// consumed by reasoning or thinking tokens before any visible text was
-	// produced, because that cap covers both. Raising the cap or lowering the
-	// reasoning effort is the fix; retrying the same request is not.
+	// ErrEmptyResponse means the provider returned a well-formed completed
+	// response containing no visible text.
 	ErrEmptyResponse = errors.New("provider returned no text output")
+
+	// ErrOutputLimit means the configured output budget was exhausted. On
+	// reasoning models this can happen before any visible answer is produced
+	// because reasoning and visible output share the same budget.
+	ErrOutputLimit = errors.New("provider output token limit was exhausted")
+
+	// ErrIncompleteResponse means a synchronous provider call ended in a
+	// nonterminal or otherwise incomplete state for a reason other than the
+	// configured output-token limit.
+	ErrIncompleteResponse = errors.New("provider response is incomplete")
+
+	// ErrFailedResponse means the provider returned a terminal failed or
+	// canceled response despite an otherwise successful HTTP request.
+	ErrFailedResponse = errors.New("provider response failed")
 )
 
 // APIError is a non-2xx response from a provider.
@@ -79,11 +88,11 @@ func (e *APIError) Retryable() bool {
 
 // Request is a single question for a provider.
 type Request struct {
-	// UserID is the Alexa user identifier. It is hashed before being sent to
-	// any provider that accepts an end-user identifier, never sent raw.
+	// UserID is a namespaced platform identifier. It is hashed before being
+	// sent to any provider that accepts an end-user identifier, never sent raw.
 	UserID string
 
-	// Prompt is the question as Alexa transcribed it.
+	// Prompt is the question normalized by the inbound adapter.
 	Prompt string
 
 	// Model overrides the provider's configured model when set. It exists so
@@ -92,7 +101,7 @@ type Request struct {
 
 	// MaxOutputTokens caps the response. On reasoning models this budget also
 	// covers reasoning tokens, so a value tuned for visible text alone can
-	// yield ErrEmptyResponse.
+	// yield ErrOutputLimit before the model writes an answer.
 	MaxOutputTokens int
 
 	// SystemPrompt shapes the answer for speech. Empty means the package
