@@ -13,14 +13,10 @@
           ],
           "samples": [
             "about {Query}",
-            "what is {Query}",
-            "why {Query}",
-            "how {Query}",
-            "whether {Query}",
-            "explain {Query}",
-            "to explain {Query}",
-            "for {Query}",
-            "the answer to {Query}"
+            "regarding {Query}",
+            "to answer {Query}",
+            "the question {Query}",
+            "this question {Query}"
           ]
         },
         {
