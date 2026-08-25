@@ -1,6 +1,7 @@
 package alexa
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rsa"
@@ -110,7 +111,7 @@ func (v *RequestVerifier) Verify(r *http.Request, body []byte, envelope *Request
 
 	if allowed := strings.TrimSpace(v.cfg.AllowedSkillID); allowed != "" {
 		if got := envelope.ApplicationID(); got != allowed {
-			return fmt.Errorf("Alexa skill ID is not allowed")
+			return errors.New("Alexa skill ID is not allowed")
 		}
 	}
 
@@ -218,13 +219,17 @@ func (v *RequestVerifier) fetchCertificateChain(ctx context.Context, certificate
 		client = newCertificateHTTPClient()
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, certificateURL, http.NoBody)
+	// certificateURL has passed strict scheme, host, port, and path validation.
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, certificateURL, http.NoBody) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("%w: build request", ErrCertificateFetch)
 	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("%w: request failed", ErrCertificateFetch)
+	}
+	if response.Body == nil {
+		return nil, fmt.Errorf("%w: response body is missing", ErrCertificateFetch)
 	}
 	defer func() {
 		_ = response.Body.Close()
@@ -245,13 +250,18 @@ func (v *RequestVerifier) fetchCertificateChain(ctx context.Context, certificate
 }
 
 func newCertificateHTTPClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = (&net.Dialer{
-		Timeout:   certificateFetchTimeout,
-		KeepAlive: 30 * time.Second,
-	}).DialContext
-	transport.ResponseHeaderTimeout = certificateFetchTimeout
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: certificateFetchTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   certificateFetchTimeout,
+		ResponseHeaderTimeout: certificateFetchTimeout,
+		ExpectContinueTimeout: time.Second,
+		MaxResponseHeaderBytes: 16 << 10,
+		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
+	}
 
 	return &http.Client{
 		Transport: transport,
@@ -315,7 +325,7 @@ func parseCertificateChain(chainPEM []byte) ([]*x509.Certificate, error) {
 	for len(remaining) > 0 {
 		block, rest := pem.Decode(remaining)
 		if block == nil {
-			if strings.TrimSpace(string(remaining)) != "" {
+			if len(bytes.TrimSpace(remaining)) != 0 {
 				return nil, fmt.Errorf("%w: malformed PEM", ErrInvalidCertificate)
 			}
 			break
