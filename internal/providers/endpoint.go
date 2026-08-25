@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -123,8 +124,8 @@ func (e endpoint) resolve(req Request, keyName, modelName string) (call, error) 
 // It returns the HTTP status and the time spent in the call. A non-2xx status
 // is not an error here: the provider owns extracting a message from its own
 // error envelope, which postJSON has already decoded into out.
-func (e endpoint) postJSON(ctx context.Context, path string, headers map[string]string, payload, out any) (int, time.Duration, error) {
-	endpointURL, err := e.resolveURL(path)
+func (e endpoint) postJSON(ctx context.Context, providerPath string, headers map[string]string, payload, out any) (int, time.Duration, error) {
+	endpointURL, err := e.resolveURL(providerPath)
 	if err != nil {
 		return 0, 0, err
 	}
