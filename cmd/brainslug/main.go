@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/alexa"
+	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
 	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
@@ -136,16 +137,19 @@ func run() error {
 // and request logging wraps everything so that rejected requests are logged
 // too.
 func buildHandler(cfg config.Config, provider providers.Provider, db *store.Store) http.Handler {
-	alexaHandler := alexa.NewHandler(alexa.Options{
+	application := app.NewService(app.Options{
 		Model:           cfg.SelectedModel(),
 		MaxOutputTokens: cfg.SelectedMaxOutputTokens(),
 		SaveHistory:     cfg.SaveHistory,
 		Secrets:         cfg.SecretValues(),
+	}, providers.AsAppProvider(provider), store.AsAppRepository(db))
+
+	alexaHandler := alexa.NewHandler(alexa.Options{
 		Verification: alexa.VerificationConfig{
 			VerifyRequests: cfg.AlexaVerifyRequests,
 			AllowedSkillID: cfg.AlexaAllowedSkillID,
 		},
-	}, provider, db)
+	}, application)
 
 	dashboard := web.NewDashboard(db)
 
