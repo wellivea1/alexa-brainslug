@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,15 @@ const (
 	defaultOpenAIBaseURL = "https://api.openai.com/v1"
 	openAIResponsesPath  = "/responses"
 	openAIName           = "openai"
+
+	openAIStatusCompleted  = "completed"
+	openAIStatusIncomplete = "incomplete"
+	openAIStatusFailed     = "failed"
+	openAIStatusCanceled   = "cancelled"
+	openAIStatusQueued     = "queued"
+	openAIStatusInProgress = "in_progress"
+
+	openAIIncompleteMaxOutputTokens = "max_output_tokens"
 )
 
 // OpenAI calls the OpenAI Responses API.
@@ -57,6 +67,9 @@ func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
 	if status < http.StatusOK || status > 299 {
 		return Response{}, p.ep.apiError(openAIName, status, decoded.Error.Message)
 	}
+	if err := decoded.statusError(p.ep); err != nil {
+		return Response{}, err
+	}
 
 	full := strings.TrimSpace(decoded.outputText())
 	if full == "" {
@@ -87,10 +100,16 @@ type openAITextConfig struct {
 }
 
 type openAIResponse struct {
-	Model      string             `json:"model"`
-	OutputText string             `json:"output_text"`
-	Output     []openAIOutputItem `json:"output"`
-	Error      openAIError        `json:"error"`
+	Model             string                   `json:"model"`
+	Status            string                   `json:"status"`
+	IncompleteDetails *openAIIncompleteDetails `json:"incomplete_details"`
+	OutputText        string                   `json:"output_text"`
+	Output            []openAIOutputItem       `json:"output"`
+	Error             openAIError              `json:"error"`
+}
+
+type openAIIncompleteDetails struct {
+	Reason string `json:"reason"`
 }
 
 type openAIError struct {
@@ -108,6 +127,39 @@ type openAIOutputContent struct {
 	Type    string `json:"type"`
 	Text    string `json:"text"`
 	Refusal string `json:"refusal"`
+}
+
+func (r openAIResponse) statusError(endpoint endpoint) error {
+	status := strings.TrimSpace(r.Status)
+	if status == "" || status == openAIStatusCompleted {
+		return nil
+	}
+
+	reason := ""
+	if r.IncompleteDetails != nil {
+		reason = strings.TrimSpace(r.IncompleteDetails.Reason)
+	}
+
+	switch status {
+	case openAIStatusIncomplete:
+		if reason == openAIIncompleteMaxOutputTokens {
+			return ErrOutputLimit
+		}
+		if reason == "" {
+			return ErrIncompleteResponse
+		}
+		return fmt.Errorf("%w: %s", ErrIncompleteResponse, reason)
+	case openAIStatusFailed, openAIStatusCanceled:
+		message := strings.TrimSpace(r.Error.Message)
+		if message == "" {
+			return fmt.Errorf("%w: status %s", ErrFailedResponse, status)
+		}
+		return fmt.Errorf("%w: %s", ErrFailedResponse, endpoint.redact(message))
+	case openAIStatusQueued, openAIStatusInProgress:
+		return fmt.Errorf("%w: unexpected synchronous status %s", ErrIncompleteResponse, status)
+	default:
+		return fmt.Errorf("%w: unrecognized status %s", ErrIncompleteResponse, status)
+	}
 }
 
 // outputText extracts the answer.
