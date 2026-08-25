@@ -1,68 +1,127 @@
 # Alexa Brainslug
 
-Alexa Brainslug is a self-hosted Alexa custom skill gateway. Alexa sends a captured question to a local Go service, the service calls an explicitly configured AI provider, and Alexa receives a short spoken response. Full responses are stored locally in SQLite for the dashboard and the "last response" intent.
+Alexa Brainslug is a self-hosted, single-owner service for sending selected Alexa questions to an explicitly chosen AI provider and hearing a concise answer through an Echo.
 
-The point is to route a hard question to a model you choose, deterministically, instead of whatever Alexa decides to answer with. Alexa handles the easy things; this handles the ones worth spending reasoning tokens on.
+The current entry point is a classic Alexa Skills Kit (ASK) custom skill. The target design separates that Alexa transport from a platform-independent application core so the same use cases can later be exposed through another approved adapter. Alexa+ MCP is a possible future adapter, not a current dependency or deployment target.
 
-It is not a monetized wrapper, an AWS Lambda sample, or a general chatbot framework.
+The purpose is deterministic model choice for questions worth spending reasoning tokens on. It is not a general chatbot framework, a public LLM relay, or an API for controlling Alexa from another assistant.
 
-Store publication is an intended direction, not a current state. It is gated on work that does not exist yet: per-user metering, per-user history scoping and retention, a privacy policy, and somewhere to run it that is not a home internet connection. Until then, treat this as single-owner infrastructure.
+## Scope
 
-## Architecture
+Current product surface:
+
+- Private ASK custom skill named `brain slug`.
+- Go service running locally or in Docker.
+- OpenAI and Anthropic provider clients.
+- Concise spoken answers and full local SQLite history.
+- Local development dashboard.
+
+Target architecture:
+
+- ASK adapter responsible only for Alexa verification, intent mapping, and Alexa responses.
+- Transport-neutral application service responsible for question submission, provider execution, persistence, identity scoping, and deferred work.
+- Provider and SQLite packages treated as outbound adapters.
+- Optional future MCP adapter exposing typed, domain-specific capabilities only after Amazon access, authentication, latency, and certification requirements are satisfied.
+
+Explicit non-goals:
+
+- Raw or continuous microphone access.
+- Arbitrary out-of-session speech on Echo devices.
+- A reverse MCP server that lets ChatGPT, Claude, or another client control Alexa.
+- An Alexa+ MCP tool whose only operation is `chat(prompt)` or another generic relay to a third-party LLM.
+- Skill Store publication before multi-user metering, privacy, retention, and production hosting exist.
+
+## Current And Target Architecture
+
+Current implementation:
 
 ```text
 Alexa cloud
-  -> HTTPS domain, reverse proxy, or tunnel
-  -> local Go server
-  -> selected provider API
-  -> concise Alexa speech response
-  -> local SQLite history
+  -> POST /alexa
+  -> internal/alexa
+  -> internal/providers
+  -> internal/store
+  -> Alexa response + local history
 ```
+
+The current Alexa handler directly owns provider invocation and persistence. That is workable for a first round trip, but it makes Alexa the application architecture rather than one interface to it.
+
+Target implementation:
+
+```text
+                     +----------------------+
+Alexa ASK ---------->| ASK adapter          |
+                     | verify, map, render  |
+                     +----------+-----------+
+                                |
+                                v
+                     +----------------------+
+                     | application core     |
+                     | submit, query, jobs  |
+                     | identity and policy  |
+                     +----+------------+----+
+                          |            |
+                          v            v
+                    AI providers     SQLite store
+
+Future approved MCP client
+  -> MCP adapter
+  -> the same application core
+```
+
+The first architectural change is behavior-preserving: extract the question and history use cases from `internal/alexa` into `internal/app`. Do not add MCP, a capability registry, or another network listener during that extraction.
+
+See [docs/architecture.md](docs/architecture.md) for the target boundaries and migration sequence.
 
 ## Current Status
 
-This is a first working skeleton. Alexa routing, SQLite history, Docker setup, the local dashboard, OpenAI, and Anthropic provider calls are implemented.
+Implemented:
 
-**There is currently no configuration in which this both works and is safe to expose.** Full Alexa request signature verification is not implemented. With the default `ALEXA_VERIFY_REQUESTS=true`, `/alexa` rejects everything, including Alexa. With `ALEXA_VERIFY_REQUESTS=false` it works, but the endpoint is an unauthenticated proxy to your paid API key for anyone who finds the hostname. Signature verification is the blocker for everything else.
+- Go HTTP server with `/health`, `/alexa`, `/history`, and `/`.
+- Alexa launch, ask, last response, help, fallback, stop, cancel, repeat, and session-end routing.
+- OpenAI Responses API and Anthropic Messages API clients.
+- Explicit provider and model selection.
+- SQLite interaction history and migrations.
+- Local dashboard.
+- Docker Compose, Caddy example, CI, linting, and tests.
 
-Other known gaps that will bite before that one is fixed:
+Blocking or materially incomplete:
 
-- Provider timeouts default to 12 seconds. Alexa gives up at 8. Slow answers produce a spoken error *and* a successful history row.
-- `MAX_OUTPUT_TOKENS` covers reasoning/thinking tokens as well as visible text on both providers. At 600 a reasoning model can spend the whole budget thinking and return nothing, which surfaces as "response did not include text output".
-- `ANTHROPIC_MODEL` defaults to `claude-sonnet-4-5`, which is legacy. Current models are not a drop-in swap: they run adaptive thinking by default, so raising the token budget has to land first.
-- The sample utterances in `skill/interaction-model.json` produce "Alexa, ask brain slug ask what is X". See [docs/invocation-design.md](docs/invocation-design.md).
-- `/alexa` has no rate limiting.
-- `/` and `/history` have no authentication and must not be routed publicly. See the Caddyfile.
+- Alexa request signature verification is a fail-closed placeholder. With `ALEXA_VERIFY_REQUESTS=true`, Alexa is rejected. With it disabled, the endpoint is an unauthenticated route to a paid provider key.
+- Provider timeouts default to 12 seconds while an ASK response must complete inside Alexa's roughly 8-second request budget.
+- Slow reasoning requests are treated as failed voice turns instead of deferred jobs.
+- `MAX_OUTPUT_TOKENS` covers reasoning or thinking tokens as well as visible text, so the current low default can produce no answer text.
+- The shipped sample utterances produce awkward one-shot phrases such as `Alexa, ask Brain Slug ask ...`.
+- `/`, `/history`, and `/alexa` share one listener. Proxy rules must currently prevent public access to the dashboard and history.
+- `/alexa` has no rate limiting or global spend cap.
+- History retention and multi-user scoping are incomplete.
 
-See [docs/project-plan.md](docs/project-plan.md) for the ordering.
+There is currently no configuration that is both functional and safe for continuous public exposure. Use a short-lived tunnel only for controlled round-trip testing until request verification is implemented.
 
-## Repository Layout
+## Why MCP Is Future-Only
 
-```text
-cmd/brainslug      process lifecycle, routing, middleware wiring
-internal/alexa     skill endpoint: verification, intent routing, responses
-internal/providers AI backends; one thin HTTP client per provider
-internal/speech    shaping model output into text safe to read aloud
-internal/store     SQLite history and schema migrations
-internal/config    environment loading and startup validation
-internal/security  HTTP middleware and secret redaction
-internal/prompts   the system instruction sent with every question
-internal/web       local development dashboard
-skill/             Alexa interaction model
-```
+Amazon's documented Alexa+ MCP architecture makes Alexa+ the MCP client and the third party the MCP server. Production access is currently partner-gated, not a self-service replacement for ASK.
 
-Dependencies point inward and never cycle. `internal/alexa` takes an options
-struct rather than importing `internal/config`, so the skill logic is testable
-without a process environment.
+The future MCP adapter is therefore gated on all of the following:
+
+- Amazon grants the project access to the relevant Alexa+ builder program.
+- Brainslug has useful typed capabilities beyond forwarding arbitrary prompts to another LLM.
+- The MCP server can meet Amazon's authentication and latency requirements.
+- Voice-only and display behavior are defined for every exposed operation.
+- The capability set can pass Alexa+ policy and certification review.
+
+The current private ASK skill remains the practical route. MCP work must not delay request verification, natural invocation, deferred answers, or application-core extraction.
+
+See [docs/alexa-platform.md](docs/alexa-platform.md) and [docs/mcp-roadmap.md](docs/mcp-roadmap.md).
 
 ## Requirements
 
-- Go 1.26 or newer
-- Docker and Docker Compose for containerized use
-- An API key for the selected provider
-- A public HTTPS endpoint for Alexa, using either Caddy with port-forwarded 443 or Cloudflare Tunnel
+- Go 1.26 or newer.
+- Docker and Docker Compose for containerized use.
+- An API key for the selected provider.
+- A public HTTPS endpoint for ASK testing, using a path-scoped reverse proxy or tunnel.
 
-Alexa cannot call a LAN-only URL. It must reach a public HTTPS endpoint.
+Alexa requests originate in Amazon's cloud. A LAN-only address is not a valid skill endpoint.
 
 ## Local Development
 
@@ -75,55 +134,47 @@ go mod download
 go run ./cmd/brainslug
 ```
 
-Build, test, and lint:
-
-```bash
-go test ./...
-```
-
-```bash
-go tool golangci-lint run ./...
-```
-
-The linter is pinned as a tool dependency in `go.mod`, so it needs no separate
-install and CI runs the same version. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for the full loop and the standards it enforces.
-
 Set at least:
 
 ```text
+AI_PROVIDER=openai
 OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-5-mini
 ALEXA_VERIFY_REQUESTS=false
 ```
 
-You may set `OPENAI_API_KEY_FILE` instead of `OPENAI_API_KEY` if you prefer to mount or store the key in a local file. The file should contain exactly one non-comment secret value.
+`ALEXA_VERIFY_REQUESTS=false` is only for local fixture tests or a short-lived controlled Alexa round-trip. Do not leave a public endpoint in that state.
 
-To use Anthropic instead:
+Anthropic example:
 
 ```text
 AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=your_key_here
-ANTHROPIC_MODEL=claude-sonnet-4-5
+ANTHROPIC_MODEL=your_explicit_model_name
+ALEXA_VERIFY_REQUESTS=false
 ```
 
-Use `ALEXA_VERIFY_REQUESTS=false` only for local testing. Check health:
+Run checks:
+
+```bash
+go test ./...
+go tool golangci-lint run ./...
+```
+
+Health:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8080/health
 ```
 
-Dashboard:
+Dashboard and history are local administrative surfaces:
 
 ```text
 http://127.0.0.1:8080/
-```
-
-History JSON:
-
-```text
 http://127.0.0.1:8080/history
 ```
+
+Do not publish either route.
 
 ## Docker Deployment
 
@@ -134,79 +185,119 @@ docker compose up --build -d
 docker compose logs -f brainslug
 ```
 
-The compose file binds `127.0.0.1:8080` and stores SQLite data under `./data`. Leave `SQLITE_PATH` unset in `.env` - the image already points it at the mounted volume, and overriding it sends the database somewhere the container user cannot write.
+The compose file binds the service to `127.0.0.1:8080` and stores SQLite data under `./data`.
 
-## Alexa Skill Setup Overview
+Leave `SQLITE_PATH` unset in `.env` for the provided container configuration. The image already points it at the mounted volume.
+
+See [docs/local-deployment.md](docs/local-deployment.md).
+
+## Alexa Skill Setup
 
 1. Create a custom skill in the Alexa Developer Console.
-2. Use invocation name `brain slug`.
+2. Use a custom interaction model and invocation name `brain slug`.
 3. Import `skill/interaction-model.json`.
-4. Set the endpoint to `https://your-domain.example/alexa`.
-5. Build the model.
-6. Test: "Alexa, open Brain Slug", then ask a question in the follow-up turn.
+4. Set the HTTPS endpoint to `https://your-domain.example/alexa`.
+5. Record the skill application ID in `ALEXA_ALLOWED_SKILL_ID`.
+6. Build and test the model.
 
-The one-shot form currently reads badly - the shipped sample utterances produce "Alexa, ask Brain Slug ask what is SQLite". See [docs/invocation-design.md](docs/invocation-design.md) for why and what to replace them with.
+The two-turn flow is the least fragile current test:
 
-See `docs/alexa-skill-setup.md` for more detail.
+```text
+Alexa, open Brain Slug
+Brainslug is ready. What should I ask?
+<question>
+```
 
-## HTTPS And Tunnels
+The interaction model still needs the one-shot utterance rewrite and slot-elicitation work described in [docs/invocation-design.md](docs/invocation-design.md).
 
-Use one of these:
+Full setup instructions are in [docs/alexa-skill-setup.md](docs/alexa-skill-setup.md).
 
-- Caddy terminating TLS on a public domain and reverse proxying to `127.0.0.1:8080`
-- Cloudflare Tunnel routing a public hostname to `http://127.0.0.1:8080`
+## Public HTTPS Routing
 
-In either case scope the route to `/alexa` only. `Caddyfile.example` shows this; for Cloudflare Tunnel use a path-scoped ingress rule. Proxying the whole origin publishes the dashboard and the history feed.
+Expose only `POST /alexa` through Caddy or Cloudflare Tunnel. A whole-origin proxy also publishes the unauthenticated dashboard and history feed.
 
-NAT loopback or LAN access is not enough because Alexa requests originate from Amazon's cloud.
+Required public behavior:
 
-## Environment Variables
+```text
+POST /alexa  -> Brainslug ASK handler
+GET  /       -> 404 from the public hostname
+GET  /history-> 404 from the public hostname
+GET  /health -> 404 from the public hostname
+```
 
-| Name | Purpose |
-| --- | --- |
-| `SERVER_ADDR` | Local bind address, default `:8080`. |
-| `PUBLIC_BASE_URL` | Documentation/reference URL for the public endpoint. |
-| `AI_PROVIDER` | Selected provider: `openai` or `anthropic`. |
-| `OPENAI_API_KEY` | OpenAI API key. Never commit it. |
-| `OPENAI_API_KEY_FILE` | Optional path to a local file containing the OpenAI API key. Overrides `OPENAI_API_KEY` when set. |
-| `OPENAI_MODEL` | Required explicit model choice, for example `gpt-5-mini`. |
-| `OPENAI_BASE_URL` | Optional OpenAI-compatible base URL. |
-| `OPENAI_MAX_OUTPUT_TOKENS` | Output cap sent to the provider. |
-| `OPENAI_TIMEOUT_SECONDS` | Provider HTTP timeout. |
-| `ANTHROPIC_API_KEY` | Anthropic API key. Never commit it. |
-| `ANTHROPIC_API_KEY_FILE` | Optional path to a local file containing the Anthropic API key. |
-| `ANTHROPIC_MODEL` | Required explicit Anthropic model when `AI_PROVIDER=anthropic`. |
-| `ANTHROPIC_BASE_URL` | Optional Anthropic-compatible base URL. |
-| `ANTHROPIC_MAX_OUTPUT_TOKENS` | Anthropic output cap. |
-| `ANTHROPIC_TIMEOUT_SECONDS` | Anthropic HTTP timeout. |
-| `SQLITE_PATH` | SQLite database path. Leave unset unless you know whether you are configuring the local or the Docker case - see `.env.example`. |
-| `ALEXA_VERIFY_REQUESTS` | Fail-closed verification toggle. Defaults to `true`. |
-| `ALEXA_ALLOWED_SKILL_ID` | Optional expected Alexa skill application ID. |
-| `LOG_LEVEL` | `debug`, `info`, `warn`, or `error`. |
-| `SAVE_HISTORY` | Whether to save local interaction history. |
+The target architecture moves administrative routes to a separate loopback-only listener so this property is structural rather than dependent on proxy configuration.
 
-## Security Warnings
+## Repository Layout
 
-- Do not expose `/alexa` publicly without real Alexa request verification.
-- Route only `/alexa` through the reverse proxy. `/` and `/history` serve every prompt and answer with no authentication; a bare `reverse_proxy` to the service publishes them.
-- Do not expose the provider API key.
-- Provider errors are redacted before local history storage, but prompts and answers are intentionally stored as local history.
-- Put the app behind HTTPS.
-- Add rate limiting before serious use. With no verification and no rate limit, an exposed endpoint is a metered API key someone else can spend.
-- Treat stored prompts and responses as private data.
+Current packages:
 
-See `docs/security.md`.
+```text
+cmd/brainslug      process lifecycle, routing, and middleware wiring
+internal/alexa     ASK request verification, intent routing, and responses
+internal/providers provider-specific AI HTTP clients
+internal/speech    output shaping for spoken responses
+internal/store     SQLite persistence and migrations
+internal/config    environment loading and validation
+internal/security  HTTP middleware and secret redaction
+internal/prompts   provider system instructions
+internal/web       local dashboard
+skill/             ASK interaction model
+```
 
-## Roadmap
+Planned boundary after the application-core extraction:
 
-See [docs/project-plan.md](docs/project-plan.md) for detail and exit criteria.
+```text
+internal/app       platform-neutral use cases and job state
+internal/alexa     ASK inbound adapter only
+internal/providers outbound AI adapters
+internal/store     outbound persistence adapter
+internal/mcp       future optional MCP inbound adapter, not yet created
+```
 
-1. Deferred answers, so a slow reasoning model does not mean a spoken error.
-2. Token budget and reasoning-effort configuration.
-3. Sample utterances and slot elicitation ([docs/invocation-design.md](docs/invocation-design.md)).
-4. Full Alexa request signature verification.
-5. Split the public `/alexa` listener from the loopback-only dashboard listener.
-6. Rate limiting for `/alexa`, by IP and Alexa user ID.
-7. Per-user history scoping and retention controls.
+Package names may move during implementation, but the dependency direction is fixed: inbound adapters depend on application interfaces; the application layer does not import Alexa or MCP protocol types.
 
-OpenCode was considered as a provider and dropped. It was only ever an implementation reference for calling an agent API; as a provider it would be a slower, more expensive path to the same chat completion.
+## Configuration
+
+The authoritative list is `.env.example`. Important groups are:
+
+- Runtime: `SERVER_ADDR`, `PUBLIC_BASE_URL`, `LOG_LEVEL`.
+- Provider selection: `AI_PROVIDER` and the selected provider's model, key, token cap, and timeout.
+- Persistence: `SQLITE_PATH`, `SAVE_HISTORY`.
+- ASK security: `ALEXA_VERIFY_REQUESTS`, `ALEXA_ALLOWED_SKILL_ID`.
+
+Provider model choice must remain explicit. Brainslug does not silently substitute a different model or provider.
+
+## Security
+
+- Do not expose `/alexa` with verification disabled.
+- Do not expose `/`, `/history`, or provider credentials.
+- Treat prompts, answers, user identifiers, and saved job state as private data.
+- Add rate limits and a spend cap before continuous external use.
+- Keep future MCP authentication separate from Alexa request-signature verification.
+- Do not send raw Alexa or MCP account identifiers to model providers.
+
+See [docs/security.md](docs/security.md).
+
+## Documentation
+
+- [Architecture](docs/architecture.md): target boundaries, request flows, identity, deferred work, and package migration.
+- [Project plan](docs/project-plan.md): ordered implementation phases and exit criteria.
+- [Alexa platform constraints](docs/alexa-platform.md): current ASK and Alexa+ MCP assumptions.
+- [Invocation design](docs/invocation-design.md): one-shot, two-turn, and deferred-answer voice behavior.
+- [Alexa skill setup](docs/alexa-skill-setup.md): private ASK configuration and test matrix.
+- [Local deployment](docs/local-deployment.md): Docker, Caddy, Cloudflare Tunnel, and route isolation.
+- [Security](docs/security.md): trust boundaries and current blockers.
+- [MCP roadmap](docs/mcp-roadmap.md): future-only gates and tool-design rules.
+- [Progress checks](docs/progress-checks.md): milestone acceptance checks.
+
+## Roadmap Summary
+
+1. Prove a real Echo round trip through a short-lived controlled tunnel.
+2. Extract a transport-neutral application service without changing behavior.
+3. Implement Alexa request verification and split public from administrative listeners.
+4. Fix invocation phrasing and add deferred jobs for slow reasoning requests.
+5. Complete identity scoping, retention, quotas, and operational limits.
+6. Add explicit reusable capabilities only where the product actually needs them.
+7. Evaluate an MCP adapter only after access and certification gates are real.
+
+The detailed ordering and exit criteria are in [docs/project-plan.md](docs/project-plan.md).
