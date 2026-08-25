@@ -14,13 +14,12 @@ import (
 	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/prompts"
-	"github.com/wellivea1/alexa-brainslug/internal/security"
 )
 
 const (
-	// defaultTimeout applies when the operator did not set one. It is
-	// deliberately shorter than Alexa's response budget.
-	defaultTimeout = 12 * time.Second
+	// defaultTimeout applies when the operator did not set one. It leaves room
+	// for Alexa and proxy overhead inside the external request budget.
+	defaultTimeout = 6 * time.Second
 
 	// maxResponseBytes caps how much of a provider response is read. A
 	// well-behaved provider returns far less; this bounds memory if one does
@@ -153,6 +152,9 @@ func (e endpoint) postJSON(ctx context.Context, path string, headers map[string]
 	if err != nil {
 		return 0, latency, fmt.Errorf("call provider: %w", err)
 	}
+	if httpResp.Body == nil {
+		return 0, latency, errors.New("provider response body is missing")
+	}
 	defer func() {
 		// Drain before closing so the connection can be reused. Neither error
 		// is actionable: the response has already been read.
@@ -160,9 +162,12 @@ func (e endpoint) postJSON(ctx context.Context, path string, headers map[string]
 		_ = httpResp.Body.Close()
 	}()
 
-	body, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBytes))
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBytes+1))
 	if err != nil {
 		return httpResp.StatusCode, latency, fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > maxResponseBytes {
+		return httpResp.StatusCode, latency, errors.New("provider response exceeds size limit")
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return httpResp.StatusCode, latency, fmt.Errorf("decode response: %w", err)
@@ -171,12 +176,12 @@ func (e endpoint) postJSON(ctx context.Context, path string, headers map[string]
 }
 
 // resolveURL joins the configured base URL with a provider path.
-func (e endpoint) resolveURL(path string) (string, error) {
+func (e endpoint) resolveURL(providerPath string) (string, error) {
 	parsed, err := url.Parse(e.baseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("%w: base URL %q is not a valid absolute URL", ErrNotConfigured, e.baseURL)
 	}
-	return e.baseURL + path, nil
+	return e.baseURL + providerPath, nil
 }
 
 // apiError builds an *APIError with the credential redacted from the message,
@@ -185,13 +190,12 @@ func (e endpoint) apiError(provider string, status int, message string) *APIErro
 	return &APIError{
 		Provider: provider,
 		Status:   status,
-		Message:  security.RedactString(strings.TrimSpace(message), e.apiKey),
+		Message:  e.redact(message),
 	}
 }
 
-// endUserIdentifier hashes an Alexa user ID for providers that accept a
-// stable end-user identifier for abuse monitoring. Providers get a correlation
-// handle; they do not get the Alexa user ID itself.
+// endUserIdentifier hashes a namespaced platform user key for providers that
+// accept a stable end-user identifier for abuse monitoring.
 func endUserIdentifier(userID string) string {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
