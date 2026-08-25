@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{{.PageTitle}} · Brainslug</title>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=2">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/?section=overview" aria-label="Brainslug overview">
+        <span class="brand-mark" aria-hidden="true">
+          <span class="brand-orbit"></span>
+          <span class="brand-slug"></span>
+        </span>
+        <span>
+          <strong>Brainslug</strong>
+          <small>Alexa gateway</small>
+        </span>
+      </a>
+
+      <nav class="primary-nav" aria-label="Management sections">
+        <span class="nav-label">Workspace</span>
+        <a href="/?section=overview" {{if eq .Section "overview"}}aria-current="page"{{end}}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z"/></svg>
+          Overview
+        </a>
+        <a href="/?section=activity" {{if eq .Section "activity"}}aria-current="page"{{end}}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 5v2h10V8H7Zm0 4v2h10v-2H7Zm0 4v2h7v-2H7Z"/></svg>
+          Activity
+        </a>
+        <a href="/?section=inference" {{if eq .Section "inference"}}aria-current="page"{{end}}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a4 4 0 0 1 4 4v1h1a4 4 0 0 1 2 7.46V17a4 4 0 0 1-4 4h-1.54A4 4 0 0 1 12 22a4 4 0 0 1-1.46-1H9a4 4 0 0 1-4-4v-2.54A4 4 0 0 1 7 7h1V6a4 4 0 0 1 4-4Zm0 2a2 2 0 0 0-2 2v3H8a2 2 0 1 0 0 4h2v4a2 2 0 1 0 4 0v-4h2a2 2 0 1 0 0-4h-2V6a2 2 0 0 0-2-2Z"/></svg>
+          Inference
+        </a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span class="local-lock" aria-hidden="true">●</span>
+        <div>
+          <strong>Local administration</strong>
+          <span>Keep port 8081 private.</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Management</p>
+          <h1>{{.PageTitle}}</h1>
+          <p class="page-description">{{.PageDescription}}</p>
+        </div>
+        <div class="topbar-status status-{{.System.Tone}}">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div>
+            <strong>{{.System.Verdict}}</strong>
+            <span>Uptime {{.Uptime}}</span>
+          </div>
+        </div>
+      </header>
+
+      <nav class="mobile-nav" aria-label="Management sections">
+        <a href="/?section=overview" {{if eq .Section "overview"}}aria-current="page"{{end}}>Overview</a>
+        <a href="/?section=activity" {{if eq .Section "activity"}}aria-current="page"{{end}}>Activity</a>
+        <a href="/?section=inference" {{if eq .Section "inference"}}aria-current="page"{{end}}>Inference</a>
+      </nav>
+
+      <main>
+        {{if .Notice}}<div class="notice notice-ok" role="status">{{.Notice}}</div>{{end}}
+        {{if .FormError}}<div class="notice notice-error" role="alert">{{.FormError}}</div>{{end}}
+
+        {{if eq .Section "overview"}}
+        <section class="hero hero-{{.System.Tone}}" aria-labelledby="system-verdict">
+          <div class="hero-copy">
+            <p class="eyebrow">System verdict</p>
+            <h2 id="system-verdict">{{.System.Verdict}}</h2>
+            <p>{{.System.Detail}}</p>
+          </div>
+          <div class="health-grid" aria-label="System checks">
+            <div class="health-item">
+              <span class="health-icon {{if .System.AlexaVerification}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
+              <div><strong>Alexa verification</strong><span>{{if .System.AlexaVerification}}Enforced{{else}}Disabled{{end}}</span></div>
+            </div>
+            <div class="health-item">
+              <span class="health-icon {{if .System.PublicEndpointConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
+              <div><strong>Public endpoint</strong><span>{{if .System.PublicEndpointConfigured}}Configured{{else}}Missing{{end}}</span></div>
+            </div>
+            <div class="health-item">
+              <span class="health-icon {{if .System.HistoryEnabled}}is-ok{{else}}is-neutral{{end}}" aria-hidden="true"></span>
+              <div><strong>Local history</strong><span>{{if .System.HistoryEnabled}}Saving{{else}}Disabled{{end}}</span></div>
+            </div>
+            <div class="health-item">
+              <span class="health-icon {{if .ActiveProvider.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
+              <div><strong>Inference</strong><span>{{.ActiveProvider.Model}}</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="metric-grid" aria-label="Interaction metrics">
+          <article class="metric-card"><span>Requests loaded</span><strong>{{.Stats.Total}}</strong><small>Latest 100 records</small></article>
+          <article class="metric-card"><span>Success rate</span><strong>{{.Stats.SuccessRate}}</strong><small>{{.Stats.Errors}} errors</small></article>
+          <article class="metric-card"><span>Average latency</span><strong>{{.Stats.AverageMS}}</strong><small>P95 {{.Stats.P95MS}}</small></article>
+          <article class="metric-card"><span>Last activity</span><strong class="metric-text">{{.Stats.LastActivity}}</strong><small>Stored locally</small></article>
+        </section>
+
+        <div class="overview-grid">
+          <section class="panel provider-summary" aria-labelledby="provider-summary-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">Active route</p><h2 id="provider-summary-title">{{.ActiveProvider.Name}}</h2></div>
+              <a class="text-link" href="/?section=inference">Manage</a>
+            </div>
+            <div class="model-lockup">
+              <span class="provider-monogram">{{if eq .ActiveProvider.ID "openai"}}O{{else}}A{{end}}</span>
+              <div><strong>{{.ActiveProvider.Model}}</strong><span>{{.ActiveProvider.EndpointKind}}</span></div>
+            </div>
+            <dl class="detail-list">
+              <div><dt>Endpoint</dt><dd>{{.ActiveProvider.EffectiveBaseURL}}</dd></div>
+              <div><dt>Response deadline</dt><dd>{{.ActiveProvider.TimeoutSeconds}} seconds</dd></div>
+              <div><dt>Output budget</dt><dd>{{.ActiveProvider.MaxOutputTokens}} tokens</dd></div>
+              {{if eq .ActiveProvider.ID "openai"}}
+              <div><dt>Reasoning / verbosity</dt><dd>{{if .ActiveProvider.ReasoningEffort}}{{.ActiveProvider.ReasoningEffort}}{{else}}provider default{{end}} / {{if .ActiveProvider.TextVerbosity}}{{.ActiveProvider.TextVerbosity}}{{else}}provider default{{end}}</dd></div>
+              {{end}}
+              <div><dt>Credential</dt><dd class="{{if .ActiveProvider.CredentialConfigured}}text-ok{{else}}text-warn{{end}}">{{.ActiveProvider.CredentialSource}}</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel recent-panel" aria-labelledby="recent-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">Latest turns</p><h2 id="recent-title">Recent activity</h2></div>
+              <a class="text-link" href="/?section=activity">View all</a>
+            </div>
+            {{if .OverviewInteractions}}
+            <ol class="recent-list">
+              {{range .OverviewInteractions}}
+              <li>
+                <span class="activity-state state-{{.Status}}" aria-label="Status {{.Status}}"></span>
+                <div class="recent-copy"><strong>{{.Prompt}}</strong><span>{{.Provider}} · {{.Model}}</span></div>
+                <time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{shortTimestamp .CreatedAt}}</time>
+              </li>
+              {{end}}
+            </ol>
+            {{else}}
+            <div class="empty-state"><strong>No stored interactions</strong><span>Your first Alexa request will appear here.</span></div>
+            {{end}}
+          </section>
+        </div>
+
+        {{else if eq .Section "activity"}}
+        <section class="panel activity-panel" aria-labelledby="activity-title">
+          <div class="section-heading activity-heading">
+            <div><p class="eyebrow">History</p><h2 id="activity-title">Stored interactions</h2></div>
+            <a class="button button-secondary" href="/history?limit=100">Open JSON</a>
+          </div>
+          <form class="filter-bar" method="get" action="/">
+            <input type="hidden" name="section" value="activity">
+            <label class="search-field"><span class="sr-only">Search activity</span><input type="search" name="query" value="{{.Query}}" placeholder="Search prompts, answers, models…"></label>
+            <label><span class="sr-only">Filter by status</span><select name="status"><option value="all">All statuses</option><option value="ok" {{if eq .StatusFilter "ok"}}selected{{end}}>Successful</option><option value="error" {{if eq .StatusFilter "error"}}selected{{end}}>Errors</option></select></label>
+            <label><span class="sr-only">Filter by provider</span><select name="provider_filter"><option value="all">All providers</option><option value="openai" {{if eq .ProviderFilter "openai"}}selected{{end}}>OpenAI / compatible</option><option value="anthropic" {{if eq .ProviderFilter "anthropic"}}selected{{end}}>Anthropic</option></select></label>
+            <button class="button button-primary" type="submit">Filter</button>
+            {{if or .Query .StatusFilter .ProviderFilter}}<a class="button button-quiet" href="/?section=activity">Clear</a>{{end}}
+          </form>
+
+          {{if .Interactions}}
+          <div class="table-wrap">
+            <table class="activity-table" aria-label="Stored interactions">
+              <thead><tr><th>Time</th><th>Request and response</th><th>Route</th><th>Latency</th><th>Status</th></tr></thead>
+              <tbody>
+                {{range .Interactions}}
+                <tr>
+                  <td data-label="Time"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{timestamp .CreatedAt}}</time></td>
+                  <td data-label="Request and response" class="interaction-copy">
+                    <strong>{{.Prompt}}</strong>
+                    {{if .ShortAnswer}}<p>{{.ShortAnswer}}</p>{{end}}
+                    {{if and .FullAnswer (ne .FullAnswer .ShortAnswer)}}<details><summary>Full response</summary><p>{{.FullAnswer}}</p></details>{{end}}
+                    {{if .ErrorMessage}}<details class="error-detail"><summary>Error detail</summary><p>{{.ErrorMessage}}</p></details>{{end}}
+                  </td>
+                  <td data-label="Route"><strong class="route-provider">{{.Provider}}</strong><span>{{.Model}}</span></td>
+                  <td data-label="Latency">{{ms .LatencyMS}}</td>
+                  <td data-label="Status"><span class="status-label status-label-{{.Status}}"><span></span>{{.Status}}</span></td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <div class="empty-state empty-state-large"><strong>No matching activity</strong><span>Adjust the filters or clear the search.</span></div>
+          {{end}}
+        </section>
+
+        {{else}}
+        <section class="panel provider-manager" aria-labelledby="provider-manager-title">
+          <header class="manager-header">
+            <div>
+              <p class="eyebrow">Model manager</p>
+              <h2 id="provider-manager-title">Inference provider</h2>
+              <p>{{.ActiveProvider.Model}} · {{.ActiveProvider.EndpointKind}}</p>
+            </div>
+            <div class="manager-active">
+              <span class="status-dot status-dot-ok" aria-hidden="true"></span>
+              <span><small>Active provider</small><strong>{{.ActiveProvider.Name}}</strong></span>
+            </div>
+          </header>
+
+          <nav class="provider-tabs" aria-label="Inference providers" role="tablist">
+            <a href="/?section=inference&amp;provider=openai" role="tab" aria-selected="{{if eq .ProviderTab "openai"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai"}}aria-current="page"{{end}}>OpenAI / compatible{{if .Inference.OpenAI.Active}}<span>Active</span>{{end}}</a>
+            <a href="/?section=inference&amp;provider=anthropic" role="tab" aria-selected="{{if eq .ProviderTab "anthropic"}}true{{else}}false{{end}}" {{if eq .ProviderTab "anthropic"}}aria-current="page"{{end}}>Anthropic{{if .Inference.Anthropic.Active}}<span>Active</span>{{end}}</a>
+          </nav>
+
+          {{if eq .ProviderTab "openai"}}
+          <div class="provider-panel" role="tabpanel" aria-labelledby="openai-provider-title">
+            <div class="provider-panel-head">
+              <div class="provider-identity">
+                <span class="provider-monogram" aria-hidden="true">O</span>
+                <span><h3 id="openai-provider-title">OpenAI / compatible</h3><small>{{.Inference.OpenAI.EndpointKind}}</small></span>
+              </div>
+              <div class="provider-health">
+                <span class="health-icon {{if .Inference.OpenAI.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
+                <span><strong>{{if .Inference.OpenAI.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.OpenAI.CredentialSource}}</small></span>
+              </div>
+            </div>
+            <form class="provider-form" method="post" action="/settings/provider">
+              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+              <input type="hidden" name="section" value="inference">
+              <input type="hidden" name="provider" value="openai">
+              <div class="form-grid">
+                <label class="field"><span>Model</span><input name="model" list="openai-models" value="{{.Inference.OpenAI.Model}}" required autocomplete="off"><small>Choose a suggested model or enter an exact compatible model ID.</small></label>
+                <label class="field"><span>Base URL</span><input type="url" name="base_url" value="{{.Inference.OpenAI.BaseURL}}" placeholder="https://api.openai.com/v1"><small>Leave blank for the official OpenAI endpoint.</small></label>
+              </div>
+              <datalist id="openai-models">{{range .OpenAIModels}}<option value="{{.ID}}">{{.Name}} — {{.Description}}</option>{{end}}</datalist>
+              <details class="advanced-settings">
+                <summary>Request settings</summary>
+                <div class="advanced-grid">
+                  <label class="field"><span>Reasoning effort</span><select name="reasoning_effort"><option value="" {{if eq .Inference.OpenAI.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.OpenAI.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.OpenAI.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.OpenAI.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.OpenAI.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select><small>Use provider default for broad compatibility.</small></label>
+                  <label class="field"><span>Text verbosity</span><select name="text_verbosity"><option value="" {{if eq .Inference.OpenAI.TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .Inference.OpenAI.TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.TextVerbosity "high"}}selected{{end}}>High</option></select></label>
+                  <label class="field"><span>Maximum output tokens</span><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.OpenAI.MaxOutputTokens}}" required></label>
+                  <label class="field"><span>Timeout in seconds</span><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.OpenAI.TimeoutSeconds}}" required></label>
+                </div>
+              </details>
+              <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.OpenAI.Active}}Save settings{{else}}Use OpenAI{{end}}</button></div>
+            </form>
+          </div>
+          {{else}}
+          <div class="provider-panel" role="tabpanel" aria-labelledby="anthropic-provider-title">
+            <div class="provider-panel-head">
+              <div class="provider-identity">
+                <span class="provider-monogram provider-monogram-alt" aria-hidden="true">A</span>
+                <span><h3 id="anthropic-provider-title">Anthropic</h3><small>{{.Inference.Anthropic.EndpointKind}}</small></span>
+              </div>
+              <div class="provider-health">
+                <span class="health-icon {{if .Inference.Anthropic.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
+                <span><strong>{{if .Inference.Anthropic.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.Anthropic.CredentialSource}}</small></span>
+              </div>
+            </div>
+            <form class="provider-form" method="post" action="/settings/provider">
+              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+              <input type="hidden" name="section" value="inference">
+              <input type="hidden" name="provider" value="anthropic">
+              <div class="form-grid">
+                <label class="field"><span>Model</span><input name="model" value="{{.Inference.Anthropic.Model}}" placeholder="claude-model-id" required autocomplete="off"><small>Use the exact API model ID enabled for your account.</small></label>
+                <label class="field"><span>Base URL</span><input type="url" name="base_url" value="{{.Inference.Anthropic.BaseURL}}" placeholder="https://api.anthropic.com/v1"><small>Leave blank for the official Anthropic endpoint.</small></label>
+              </div>
+              <details class="advanced-settings">
+                <summary>Request settings</summary>
+                <div class="advanced-grid">
+                  <label class="field"><span>Maximum output tokens</span><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.Anthropic.MaxOutputTokens}}" required></label>
+                  <label class="field"><span>Timeout in seconds</span><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.Anthropic.TimeoutSeconds}}" required></label>
+                </div>
+              </details>
+              <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.Anthropic.Active}}Save settings{{else}}Use Anthropic{{end}}</button></div>
+            </form>
+          </div>
+          {{end}}
+        </section>
+        {{end}}
+      </main>
+
+      <footer>
+        <span>Generated {{timestamp .GeneratedAt}}</span>
+        <span>Private data · loopback administration only</span>
+      </footer>
+    </div>
+  </div>
+</body>
+</html>

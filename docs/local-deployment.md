@@ -82,6 +82,13 @@ http://127.0.0.1:8081/
 http://127.0.0.1:8081/history
 ```
 
+Use the Inference page to change the explicit provider, model, endpoint, token
+cap, timeout, and supported OpenAI reasoning/text controls without restarting.
+Non-secret settings persist beside SQLite by default; override the location
+with `RUNTIME_SETTINGS_PATH`. Credentials still come only from environment
+variables or secret files and are never entered into or displayed by the
+dashboard.
+
 The public port should return 404 for those paths:
 
 ```powershell

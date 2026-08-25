@@ -294,7 +294,24 @@ The Alexa HTTP request context must not become the lifetime of an accepted backg
 
 The dashboard is an administrative surface, not a public product interface.
 
-It is registered only on the administrative listener. It currently reads the SQLite store directly. A later read-service extraction may route it through application queries, but listener isolation is the immediate security property.
+It is registered only on the administrative listener. It reads the SQLite
+store directly for overview metrics and bounded, searchable recent activity.
+It also talks to a secret-free inference manager for explicit provider and
+model changes. A later read-service extraction may route history through
+application queries, but listener isolation is the immediate security
+property.
+
+The inference manager constructs and validates a complete candidate provider,
+persists only non-secret runtime settings, and then atomically swaps the
+application service to that provider. Each in-flight request keeps the
+provider/options snapshot it started with. API keys remain config inputs from
+the environment or secret files and are never returned through the management
+view.
+
+Dashboard-managed settings default to a versioned JSON file beside SQLite.
+The file is loaded after environment defaults and before secret-file loading,
+so a restart preserves the last explicit provider/model selection without
+turning the settings file into a credential store.
 
 Remote administration would require separate authentication. It must not be added by exposing the current administrative port.
 

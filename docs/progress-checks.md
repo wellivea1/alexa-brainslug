@@ -276,6 +276,9 @@ Before continuous public exposure:
 - [x] ASK port is host-loopback only.
 - [x] Administrative port is host-loopback only.
 - [x] Administrative `/health` reports provider and model without secrets.
+- [x] Dashboard provides overview, searchable activity, and integrated provider management.
+- [x] Provider/model changes activate without restart and persist without credentials.
+- [x] Dashboard is visually checked at desktop and phone breakpoints.
 - [x] Public port has no administrative routes.
 - [ ] Real Caddy or Tunnel route is tested.
 - [ ] Real certificate retrieval works from the container.

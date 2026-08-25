@@ -18,6 +18,7 @@ import (
 	"github.com/wellivea1/alexa-brainslug/internal/alexa"
 	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
+	"github.com/wellivea1/alexa-brainslug/internal/inference"
 	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
@@ -54,6 +55,7 @@ func main() {
 // run owns the process lifecycle and returns an error instead of exiting, so
 // that every deferred cleanup, including the database handle, actually runs.
 func run() error {
+	startedAt := time.Now().UTC()
 	if err := config.LoadDotEnv(".env"); err != nil {
 		// Not fatal: the environment may already carry everything needed.
 		slog.Warn("could not load .env", "error", err)
@@ -86,7 +88,7 @@ func run() error {
 		}
 	}()
 
-	provider, err := providers.NewConfigured(cfg, nil)
+	provider, err := providers.NewConfigured(&cfg, nil)
 	if err != nil {
 		return fmt.Errorf("configure provider: %w", err)
 	}
@@ -97,6 +99,10 @@ func run() error {
 		SaveHistory:     cfg.SaveHistory,
 		Secrets:         cfg.SecretValues(),
 	}, providers.AsAppProvider(provider), store.AsAppRepository(db))
+	providerManager, err := inference.NewManager(&cfg, application)
+	if err != nil {
+		return fmt.Errorf("configure inference manager: %w", err)
+	}
 
 	alexaHandler := alexa.NewHandler(alexa.Options{
 		Verification: alexa.VerificationConfig{
@@ -121,7 +127,7 @@ func run() error {
 			name: "admin",
 			server: &http.Server{
 				Addr:              adminAddr,
-				Handler:           buildAdminHandler(&cfg, provider.Name(), db),
+				Handler:           buildAdminHandler(&cfg, providerManager, db, startedAt),
 				ReadHeaderTimeout: readHeaderTimeout,
 				ReadTimeout:       readTimeout,
 				WriteTimeout:      adminWriteTimeout,
@@ -184,12 +190,21 @@ func buildPublicHandler(publicBaseURL string, alexaHandler http.Handler) http.Ha
 
 // buildAdminHandler registers local administrative routes on the separate
 // listener. The caller controls binding; the default is host loopback.
-func buildAdminHandler(cfg *config.Config, providerName string, db *store.Store) http.Handler {
-	dashboard := web.NewDashboard(db)
+func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time) http.Handler {
+	dashboard := web.NewDashboard(db, web.Options{
+		Inference:               controller,
+		StartedAt:               startedAt,
+		AlexaVerifyRequests:     cfg.AlexaVerifyRequests,
+		HistoryEnabled:          cfg.SaveHistory,
+		PublicBaseURLConfigured: strings.TrimSpace(cfg.PublicBaseURL) != "",
+		SkillIDConfigured:       strings.TrimSpace(cfg.AlexaAllowedSkillID) != "",
+	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(cfg, providerName))
+	mux.HandleFunc("GET /health", healthHandler(cfg, controller))
 	mux.HandleFunc("GET /history", dashboard.HandleHistory)
+	mux.HandleFunc("GET /assets/dashboard.css", dashboard.HandleStyles)
+	mux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
 	mux.HandleFunc("GET /{$}", dashboard.HandleIndex)
 
 	return security.RequestLogger(
@@ -202,13 +217,18 @@ func buildAdminHandler(cfg *config.Config, providerName string, db *store.Store)
 // It names the provider and model deliberately: an operator has to be able to
 // confirm which model is answering without reading the process environment.
 // It never reports a credential.
-func healthHandler(cfg *config.Config, providerName string) http.HandlerFunc {
+func healthHandler(cfg *config.Config, controller interface{ Snapshot() inference.Snapshot }) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		snapshot := controller.Snapshot()
+		active := snapshot.OpenAI
+		if snapshot.ActiveProvider == config.ProviderAnthropic {
+			active = snapshot.Anthropic
+		}
 		writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 			"status":                     "ok",
 			"service":                    "alexa-brainslug",
-			"provider":                   providerName,
-			"model":                      cfg.SelectedModel(),
+			"provider":                   snapshot.ActiveProvider,
+			"model":                      active.Model,
 			"alexa_request_verification": cfg.AlexaVerifyRequests,
 			"history_enabled":            cfg.SaveHistory,
 			"public_base_url_configured": strings.TrimSpace(cfg.PublicBaseURL) != "",

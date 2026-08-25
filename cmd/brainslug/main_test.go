@@ -13,9 +13,17 @@ import (
 	"github.com/wellivea1/alexa-brainslug/internal/alexa"
 	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
+	"github.com/wellivea1/alexa-brainslug/internal/inference"
 	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
 )
+
+type fakeInferenceController struct {
+	snapshot inference.Snapshot
+}
+
+func (f *fakeInferenceController) Snapshot() inference.Snapshot  { return f.snapshot }
+func (f *fakeInferenceController) Update(inference.Update) error { return nil }
 
 func TestPublicHandlerExposesOnlyAlexa(t *testing.T) {
 	alexaHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -30,7 +38,7 @@ func TestPublicHandlerExposesOnlyAlexa(t *testing.T) {
 		t.Fatalf("POST /alexa status = %d", rec.Code)
 	}
 
-	for _, path := range []string{"/", "/health", "/history"} {
+	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css", "/settings/provider"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
 			rec := httptest.NewRecorder()
@@ -59,9 +67,13 @@ func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
 			Model: "gpt-test",
 		},
 	}
-	handler := buildAdminHandler(&cfg, "fake", db)
+	controller := &fakeInferenceController{snapshot: inference.Snapshot{
+		ActiveProvider: config.ProviderOpenAI,
+		OpenAI:         inference.ProviderState{ID: config.ProviderOpenAI, Model: "gpt-test"},
+	}}
+	handler := buildAdminHandler(&cfg, controller, db, time.Now().UTC())
 
-	for _, path := range []string{"/", "/health", "/history"} {
+	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
 			rec := httptest.NewRecorder()

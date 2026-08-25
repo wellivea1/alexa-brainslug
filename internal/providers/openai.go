@@ -27,14 +27,18 @@ const (
 
 // OpenAI calls the OpenAI Responses API.
 type OpenAI struct {
-	ep endpoint
+	ep              endpoint
+	reasoningEffort string
+	textVerbosity   string
 }
 
 // NewOpenAI builds an OpenAI provider. Passing a nil client uses one with the
 // configured timeout; tests pass their own.
 func NewOpenAI(cfg config.OpenAIConfig, client *http.Client) *OpenAI {
 	return &OpenAI{
-		ep: newEndpoint(cfg.APIKey, cfg.BaseURL, defaultOpenAIBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
+		ep:              newEndpoint(cfg.APIKey, cfg.BaseURL, defaultOpenAIBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
+		reasoningEffort: strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort)),
+		textVerbosity:   strings.ToLower(strings.TrimSpace(cfg.TextVerbosity)),
 	}
 }
 
@@ -54,8 +58,13 @@ func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
 		Input:           resolved.prompt,
 		MaxOutputTokens: resolved.maxTokens,
 		Store:           false,
-		Text:            &openAITextConfig{Verbosity: "low"},
 		SafetyID:        endUserIdentifier(req.UserID),
+	}
+	if p.reasoningEffort != "" {
+		payload.Reasoning = &openAIReasoningConfig{Effort: p.reasoningEffort}
+	}
+	if p.textVerbosity != "" {
+		payload.Text = &openAITextConfig{Verbosity: p.textVerbosity}
 	}
 	headers := map[string]string{"Authorization": "Bearer " + p.ep.apiKey}
 
@@ -86,13 +95,18 @@ func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
 }
 
 type openAIRequest struct {
-	Model           string            `json:"model"`
-	Instructions    string            `json:"instructions"`
-	Input           string            `json:"input"`
-	MaxOutputTokens int               `json:"max_output_tokens"`
-	Store           bool              `json:"store"`
-	Text            *openAITextConfig `json:"text,omitempty"`
-	SafetyID        string            `json:"safety_identifier,omitempty"`
+	Model           string                 `json:"model"`
+	Instructions    string                 `json:"instructions"`
+	Input           string                 `json:"input"`
+	MaxOutputTokens int                    `json:"max_output_tokens"`
+	Store           bool                   `json:"store"`
+	Reasoning       *openAIReasoningConfig `json:"reasoning,omitempty"`
+	Text            *openAITextConfig      `json:"text,omitempty"`
+	SafetyID        string                 `json:"safety_identifier,omitempty"`
+}
+
+type openAIReasoningConfig struct {
+	Effort string `json:"effort"`
 }
 
 type openAITextConfig struct {

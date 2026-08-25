@@ -31,6 +31,8 @@ const (
 	defaultServerAddr               = "127.0.0.1:8080"
 	defaultSQLitePath               = "./brainslug.db"
 	defaultOpenAIMaxOutputTokens    = 25000
+	defaultOpenAIReasoningEffort    = ""
+	defaultOpenAITextVerbosity      = ""
 	defaultAnthropicMaxOutputTokens = 4096
 	defaultTimeoutSeconds           = 6
 	defaultLogLevel                 = "info"
@@ -63,6 +65,11 @@ type Config struct {
 	// SQLitePath is the local history database.
 	SQLitePath string
 
+	// RuntimeSettingsPath stores dashboard-managed, non-secret inference
+	// settings. Credentials always remain in environment variables or secret
+	// files and are never written here.
+	RuntimeSettingsPath string
+
 	// AlexaVerifyRequests gates Alexa request signature verification. It
 	// defaults to true and fails closed.
 	AlexaVerifyRequests bool
@@ -85,6 +92,8 @@ type OpenAIConfig struct {
 	BaseURL         string
 	MaxOutputTokens int
 	Timeout         time.Duration
+	ReasoningEffort string
+	TextVerbosity   string
 }
 
 // AnthropicConfig holds Anthropic provider settings.
@@ -162,6 +171,8 @@ func Load() (Config, error) {
 			BaseURL:         env.str("OPENAI_BASE_URL", ""),
 			MaxOutputTokens: env.intVal("OPENAI_MAX_OUTPUT_TOKENS", defaultOpenAIMaxOutputTokens),
 			Timeout:         env.seconds("OPENAI_TIMEOUT_SECONDS", defaultTimeoutSeconds),
+			ReasoningEffort: strings.ToLower(env.str("OPENAI_REASONING_EFFORT", defaultOpenAIReasoningEffort)),
+			TextVerbosity:   strings.ToLower(env.str("OPENAI_TEXT_VERBOSITY", defaultOpenAITextVerbosity)),
 		},
 		Anthropic: AnthropicConfig{
 			APIKey:          env.str("ANTHROPIC_API_KEY", ""),
@@ -172,6 +183,7 @@ func Load() (Config, error) {
 			Timeout:         env.seconds("ANTHROPIC_TIMEOUT_SECONDS", defaultTimeoutSeconds),
 		},
 		SQLitePath:          env.str("SQLITE_PATH", defaultSQLitePath),
+		RuntimeSettingsPath: env.str("RUNTIME_SETTINGS_PATH", ""),
 		AlexaVerifyRequests: env.boolVal("ALEXA_VERIFY_REQUESTS", true),
 		AlexaAllowedSkillID: env.str("ALEXA_ALLOWED_SKILL_ID", ""),
 		LogLevel:            env.str("LOG_LEVEL", defaultLogLevel),
@@ -179,6 +191,9 @@ func Load() (Config, error) {
 	}
 
 	if err := env.err(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.applyRuntimeSettingsFile(); err != nil {
 		return Config{}, err
 	}
 
@@ -219,7 +234,10 @@ func (c *Config) loadSecretFiles() error {
 
 // Validate checks the settings the selected provider needs. Settings for the
 // other provider are left alone.
-func (c Config) Validate() error {
+func (c *Config) Validate() error {
+	if c == nil {
+		return errors.New("configuration is required")
+	}
 	if strings.TrimSpace(c.ServerAddr) == "" {
 		return errors.New("SERVER_ADDR must not be empty")
 	}
@@ -232,12 +250,31 @@ func (c Config) Validate() error {
 
 	switch c.Provider {
 	case ProviderOpenAI:
-		return validateProvider("OPENAI", c.OpenAI.Model, c.OpenAI.MaxOutputTokens, c.OpenAI.Timeout)
+		if err := validateProvider("OPENAI", c.OpenAI.Model, c.OpenAI.MaxOutputTokens, c.OpenAI.Timeout); err != nil {
+			return err
+		}
+		if strings.TrimSpace(c.OpenAI.ReasoningEffort) != "" && !oneOf(c.OpenAI.ReasoningEffort, "none", "low", "medium", "high", "xhigh", "max") {
+			return errors.New("OPENAI_REASONING_EFFORT must be one of none, low, medium, high, xhigh, max")
+		}
+		if strings.TrimSpace(c.OpenAI.TextVerbosity) != "" && !oneOf(c.OpenAI.TextVerbosity, "low", "medium", "high") {
+			return errors.New("OPENAI_TEXT_VERBOSITY must be one of low, medium, high")
+		}
+		return nil
 	case ProviderAnthropic:
 		return validateProvider("ANTHROPIC", c.Anthropic.Model, c.Anthropic.MaxOutputTokens, c.Anthropic.Timeout)
 	default:
 		return fmt.Errorf("AI_PROVIDER must be one of %s, %s", ProviderOpenAI, ProviderAnthropic)
 	}
+}
+
+func oneOf(value string, allowed ...string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 // validateProvider applies the same rules to every provider block, named by
@@ -256,7 +293,7 @@ func validateProvider(prefix, model string, maxOutputTokens int, timeout time.Du
 }
 
 // SelectedModel reports the model the selected provider will use.
-func (c Config) SelectedModel() string {
+func (c *Config) SelectedModel() string {
 	if c.Provider == ProviderAnthropic {
 		return c.Anthropic.Model
 	}
@@ -264,7 +301,7 @@ func (c Config) SelectedModel() string {
 }
 
 // SelectedMaxOutputTokens reports the output cap for the selected provider.
-func (c Config) SelectedMaxOutputTokens() int {
+func (c *Config) SelectedMaxOutputTokens() int {
 	if c.Provider == ProviderAnthropic {
 		return c.Anthropic.MaxOutputTokens
 	}
@@ -273,7 +310,7 @@ func (c Config) SelectedMaxOutputTokens() int {
 
 // SelectedTimeout reports the provider HTTP timeout for the selected
 // provider.
-func (c Config) SelectedTimeout() time.Duration {
+func (c *Config) SelectedTimeout() time.Duration {
 	if c.Provider == ProviderAnthropic {
 		return c.Anthropic.Timeout
 	}
@@ -283,7 +320,7 @@ func (c Config) SelectedTimeout() time.Duration {
 // SecretValues returns every credential in the configuration, for redaction
 // before anything is logged or stored. Blank entries are harmless: redaction
 // ignores short values.
-func (c Config) SecretValues() []string {
+func (c *Config) SecretValues() []string {
 	return []string{c.OpenAI.APIKey, c.Anthropic.APIKey}
 }
 

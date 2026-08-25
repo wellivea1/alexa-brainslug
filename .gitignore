@@ -4,6 +4,8 @@
 
 brainslug.db
 brainslug.db-*
+*.settings.json
+.codex-verify/
 data/
 
 bin/

@@ -28,7 +28,10 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://api.example.test/v1")
 	t.Setenv("OPENAI_MAX_OUTPUT_TOKENS", "128")
 	t.Setenv("OPENAI_TIMEOUT_SECONDS", "3")
+	t.Setenv("OPENAI_REASONING_EFFORT", "high")
+	t.Setenv("OPENAI_TEXT_VERBOSITY", "medium")
 	t.Setenv("SQLITE_PATH", "test.db")
+	t.Setenv("RUNTIME_SETTINGS_PATH", filepath.Join(t.TempDir(), "missing-settings.json"))
 	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
 	t.Setenv("ALEXA_ALLOWED_SKILL_ID", "amzn1.ask.skill.test")
 	t.Setenv("LOG_LEVEL", "debug")
@@ -57,11 +60,105 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	if cfg.OpenAI.Timeout != 3*time.Second {
 		t.Fatalf("Timeout = %s", cfg.OpenAI.Timeout)
 	}
+	if cfg.OpenAI.ReasoningEffort != "high" || cfg.OpenAI.TextVerbosity != "medium" {
+		t.Fatalf("OpenAI response controls = %q/%q", cfg.OpenAI.ReasoningEffort, cfg.OpenAI.TextVerbosity)
+	}
 	if cfg.AlexaVerifyRequests {
 		t.Fatal("AlexaVerifyRequests should be false")
 	}
 	if cfg.SaveHistory {
 		t.Fatal("SaveHistory should be false")
+	}
+}
+
+func TestRuntimeSettingsOverrideNonSecretInferenceConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brainslug.settings.json")
+	settings := RuntimeSettings{
+		Provider: "anthropic",
+		OpenAI: OpenAIRuntimeSettings{
+			ProviderRuntimeSettings: ProviderRuntimeSettings{
+				Model: "gpt-5.6-luna", MaxOutputTokens: 4096, TimeoutSeconds: 4,
+			},
+			ReasoningEffort: "none",
+			TextVerbosity:   "low",
+		},
+		Anthropic: ProviderRuntimeSettings{
+			Model: "claude-runtime", BaseURL: "https://anthropic.example/v1", MaxOutputTokens: 2048, TimeoutSeconds: 5,
+		},
+	}
+	if err := SaveRuntimeSettings(path, settings); err != nil {
+		t.Fatalf("SaveRuntimeSettings() error = %v", err)
+	}
+
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("AI_PROVIDER", "openai")
+	t.Setenv("OPENAI_MODEL", "gpt-environment")
+	t.Setenv("ANTHROPIC_MODEL", "claude-environment")
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Provider != ProviderAnthropic || cfg.Anthropic.Model != "claude-runtime" {
+		t.Fatalf("runtime provider/model = %q/%q", cfg.Provider, cfg.Anthropic.Model)
+	}
+	if cfg.Anthropic.BaseURL != "https://anthropic.example/v1" || cfg.Anthropic.Timeout != 5*time.Second {
+		t.Fatalf("runtime Anthropic settings = %#v", cfg.Anthropic)
+	}
+	if cfg.OpenAI.APIKey != "" {
+		t.Fatal("runtime settings unexpectedly supplied a credential")
+	}
+}
+
+func TestRuntimeSettingsCanRestoreProviderResponseControlDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brainslug.settings.json")
+	settings := RuntimeSettings{
+		Provider: ProviderOpenAI,
+		OpenAI: OpenAIRuntimeSettings{ProviderRuntimeSettings: ProviderRuntimeSettings{
+			Model: "compatible-model", MaxOutputTokens: 256, TimeoutSeconds: 6,
+		}},
+	}
+	if err := SaveRuntimeSettings(path, settings); err != nil {
+		t.Fatalf("SaveRuntimeSettings() error = %v", err)
+	}
+
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("AI_PROVIDER", ProviderOpenAI)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_MODEL", "environment-model")
+	t.Setenv("OPENAI_REASONING_EFFORT", "high")
+	t.Setenv("OPENAI_TEXT_VERBOSITY", "high")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.OpenAI.ReasoningEffort != "" || cfg.OpenAI.TextVerbosity != "" {
+		t.Fatalf("response controls = %q/%q, want provider defaults", cfg.OpenAI.ReasoningEffort, cfg.OpenAI.TextVerbosity)
+	}
+}
+
+func TestValidateRejectsUnknownOpenAIResponseControls(t *testing.T) {
+	cfg := Config{
+		ServerAddr:          "127.0.0.1:8080",
+		Provider:            ProviderOpenAI,
+		SQLitePath:          "test.db",
+		AlexaVerifyRequests: false,
+		OpenAI: OpenAIConfig{
+			Model: "gpt-test", MaxOutputTokens: 128, Timeout: time.Second,
+			ReasoningEffort: "turbo", TextVerbosity: "low",
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported reasoning effort")
+	}
+	cfg.OpenAI.ReasoningEffort = "low"
+	cfg.OpenAI.TextVerbosity = "verbose"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported text verbosity")
 	}
 }
 

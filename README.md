@@ -129,11 +129,17 @@ AI_PROVIDER=openai
 OPENAI_MODEL=gpt-5.6-terra
 OPENAI_MAX_OUTPUT_TOKENS=25000
 OPENAI_TIMEOUT_SECONDS=6
+OPENAI_REASONING_EFFORT=
+OPENAI_TEXT_VERBOSITY=
 ALEXA_VERIFY_REQUESTS=true
 SAVE_HISTORY=true
 ```
 
 `OPENAI_MAX_OUTPUT_TOKENS` is reasoning and output headroom, not a desired answer length. Reasoning models may consume the same budget before producing visible text.
+
+Leave `OPENAI_REASONING_EFFORT` and `OPENAI_TEXT_VERBOSITY` unset to use the
+provider default. This is the safest choice for OpenAI-compatible endpoints
+that do not implement those OpenAI-specific request controls.
 
 Set the real skill ID before testing:
 
@@ -192,6 +198,35 @@ Dashboard and history:
 http://127.0.0.1:8081/
 http://127.0.0.1:8081/history
 ```
+
+The dashboard provides an operating overview, searchable recent activity, and
+explicit inference-provider management. Provider, model, endpoint, token cap,
+timeout, reasoning effort, and text verbosity changes take effect immediately
+and persist in `brainslug.settings.json` beside the SQLite database by default.
+Set `RUNTIME_SETTINGS_PATH` to choose another location.
+
+The runtime settings file never contains API keys. Configure credentials with
+`OPENAI_API_KEY`, `OPENAI_API_KEY_FILE`, `ANTHROPIC_API_KEY`, or
+`ANTHROPIC_API_KEY_FILE` before selecting that provider in the dashboard.
+The local form reports only whether a credential exists and whether it came
+from the environment or a secret file.
+
+The model manager keeps OpenAI-compatible and Anthropic configuration in one
+panel with a provider tab for each. Provider and model selection stay
+explicit: Brainslug never guesses, falls back, or silently substitutes a
+different model. A custom OpenAI base URL is labeled as compatible rather than
+official OpenAI.
+
+The OpenAI model suggestions were reviewed against the official catalog on
+August 25, 2026 and include `gpt-5.6-sol`, `gpt-5.6-terra`, and
+`gpt-5.6-luna`. An exact custom model ID remains valid for compatible servers.
+See the [OpenAI model catalog](https://developers.openai.com/api/docs/models).
+
+The management UI uses a restrained, flat interpretation of Amazon's
+[Alexa color palette](https://developer.amazon.com/en-US/alexa/branding/alexa-guidelines/brand-guidelines/color)
+and the spacing, 8 dp corner, and contained/outlined action conventions in the
+[Alexa Design System](https://developer.amazon.com/en-US/docs/alexa/alexa-presentation-language/apl-alexa-packages-overview.html).
+It does not use or reproduce Amazon's protected Alexa logo.
 
 The ASK listener at port 8080 intentionally has no health, history, or dashboard route.
 

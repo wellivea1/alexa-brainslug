@@ -110,7 +110,9 @@ SERVER_ADDR
 ADMIN_SERVER_ADDR
   GET /health
   GET /history
+  GET /assets/dashboard.css
   GET /
+  POST /settings/provider
 ```
 
 Default host addresses:
@@ -123,6 +125,10 @@ ADMIN_SERVER_ADDR=127.0.0.1:8081
 Docker binds both back to host loopback. The reverse proxy or tunnel reaches port 8080 only.
 
 The administrative listener contains private prompts and answers and has no remote-user authentication. Do not publish port 8081. An explicit non-loopback `ADMIN_SERVER_ADDR` is permitted for container networking and must be protected by the deployment topology, such as Docker's host-loopback port mapping.
+
+Provider-setting changes use a per-process CSRF token and reject cross-origin
+browser submissions. These are defense-in-depth controls for a loopback-only
+surface, not remote-user authentication.
 
 The public hostname should return 404 for:
 
@@ -171,6 +177,12 @@ Requirements:
 - rotate a key after suspected exposure and inspect provider usage.
 
 The administrative health response reports provider and model names but no credentials.
+
+The dashboard persists provider, model, base URL, token limit, timeout,
+reasoning effort, and text verbosity in the non-secret runtime settings file.
+That schema deliberately has no credential field. The dashboard exposes only
+a boolean credential status and the generic source category `Environment`,
+`Secret file`, or `Not configured`.
 
 ## Provider And Model Policy
 

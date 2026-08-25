@@ -47,6 +47,8 @@ func newOpenAITestServer(t *testing.T, status int, body string) (*OpenAI, *openA
 		Model:           "gpt-test",
 		MaxOutputTokens: 256,
 		Timeout:         5 * time.Second,
+		ReasoningEffort: "low",
+		TextVerbosity:   "low",
 	}, server.Client())
 
 	return provider, captured
@@ -88,6 +90,25 @@ func TestOpenAIAskUsesOutputText(t *testing.T) {
 	}
 	if captured.MaxOutputTokens != 256 {
 		t.Errorf("max_output_tokens = %d", captured.MaxOutputTokens)
+	}
+	if captured.Reasoning == nil || captured.Reasoning.Effort != "low" {
+		t.Errorf("reasoning = %#v", captured.Reasoning)
+	}
+	if captured.Text == nil || captured.Text.Verbosity != "low" {
+		t.Errorf("text = %#v", captured.Text)
+	}
+}
+
+func TestOpenAIAskOmitsOptionalResponseControlsForCompatibleProviders(t *testing.T) {
+	provider, captured := newOpenAITestServer(t, http.StatusOK, `{"output_text": "answer"}`)
+	provider.reasoningEffort = ""
+	provider.textVerbosity = ""
+
+	if _, err := provider.Ask(t.Context(), Request{Prompt: "q"}); err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if captured.Reasoning != nil || captured.Text != nil {
+		t.Fatalf("optional controls should be omitted, got reasoning=%#v text=%#v", captured.Reasoning, captured.Text)
 	}
 }
 
@@ -279,11 +300,12 @@ func TestNewConfiguredSelectsProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
-			got, err := NewConfigured(config.Config{
+			cfg := config.Config{
 				Provider:  tt.provider,
 				OpenAI:    config.OpenAIConfig{Model: "m", APIKey: "k"},
 				Anthropic: config.AnthropicConfig{Model: "m", APIKey: "k"},
-			}, http.DefaultClient)
+			}
+			got, err := NewConfigured(&cfg, http.DefaultClient)
 
 			if tt.wantErr {
 				if !errors.Is(err, ErrNotConfigured) {

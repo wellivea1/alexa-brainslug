@@ -107,6 +107,33 @@ func TestServiceAsk(t *testing.T) {
 	}
 }
 
+func TestServiceReconfigureAppliesToSubsequentRequests(t *testing.T) {
+	initial := &fakeProvider{name: "openai", response: ProviderResponse{ShortAnswer: "initial"}}
+	next := &fakeProvider{name: "anthropic", response: ProviderResponse{ShortAnswer: "next"}}
+	service := NewService(Options{Model: "gpt-old", MaxOutputTokens: 128}, initial, nil)
+
+	if err := service.Reconfigure(Options{Model: "claude-new", MaxOutputTokens: 512}, next); err != nil {
+		t.Fatalf("Reconfigure() error = %v", err)
+	}
+	answer, err := service.Ask(t.Context(), AskRequest{Principal: testPrincipal, Prompt: "question"})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if answer.Provider != "anthropic" || next.request.Model != "claude-new" || next.request.MaxOutputTokens != 512 {
+		t.Fatalf("reconfigured request/answer = %#v / %#v", next.request, answer)
+	}
+	if initial.request.Prompt != "" {
+		t.Fatal("the previous provider handled a request after reconfiguration")
+	}
+}
+
+func TestServiceReconfigureRejectsMissingProvider(t *testing.T) {
+	service := NewService(Options{}, &fakeProvider{}, nil)
+	if err := service.Reconfigure(Options{}, nil); !errors.Is(err, ErrProviderNotConfigured) {
+		t.Fatalf("Reconfigure() error = %v", err)
+	}
+}
+
 func TestServiceAskRecordsRedactedProviderFailure(t *testing.T) {
 	const secret = "secret-token"
 	provider := &fakeProvider{err: errors.Join(ErrProviderUnavailable, errors.New(secret))}

@@ -17,7 +17,10 @@ const spokenWordLimit = 120
 //
 // Passing a nil client lets each provider build its own with the configured
 // timeout; tests pass a client pointed at a local test server.
-func NewConfigured(cfg config.Config, client *http.Client) (Provider, error) {
+func NewConfigured(cfg *config.Config, client *http.Client) (Provider, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("%w: configuration is required", ErrNotConfigured)
+	}
 	switch cfg.Provider {
 	case config.ProviderOpenAI:
 		return NewOpenAI(cfg.OpenAI, client), nil

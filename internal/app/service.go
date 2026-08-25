@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/prompts"
@@ -152,6 +153,7 @@ type Options struct {
 
 // Service implements Brainslug's synchronous question and history use cases.
 type Service struct {
+	mu         sync.RWMutex
 	opts       Options
 	provider   Provider
 	repository Repository
@@ -160,6 +162,20 @@ type Service struct {
 // NewService builds the application service from explicit outbound adapters.
 func NewService(opts Options, provider Provider, repository Repository) *Service {
 	return &Service{opts: opts, provider: provider, repository: repository}
+}
+
+// Reconfigure replaces inference policy for subsequent requests. In-flight
+// requests keep the provider snapshot they started with, so a dashboard save
+// never changes one request halfway through execution.
+func (s *Service) Reconfigure(opts Options, provider Provider) error {
+	if provider == nil {
+		return ErrProviderNotConfigured
+	}
+	s.mu.Lock()
+	s.opts = opts
+	s.provider = provider
+	s.mu.Unlock()
+	return nil
 }
 
 // Ask sends one question to the selected provider and records its outcome when
@@ -172,16 +188,17 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (Answer, error) {
 	if !req.Principal.Valid() {
 		return Answer{}, ErrInvalidPrincipal
 	}
-	if s.provider == nil {
+	opts, provider := s.inferenceSnapshot()
+	if provider == nil {
 		return Answer{}, ErrProviderNotConfigured
 	}
 
 	started := time.Now()
-	providerResp, err := s.provider.Ask(ctx, ProviderRequest{
+	providerResp, err := provider.Ask(ctx, ProviderRequest{
 		Principal:       req.Principal,
 		Prompt:          prompt,
-		Model:           s.opts.Model,
-		MaxOutputTokens: s.opts.MaxOutputTokens,
+		Model:           opts.Model,
+		MaxOutputTokens: opts.MaxOutputTokens,
 		SystemPrompt:    prompts.DefaultSystemPrompt,
 	})
 
@@ -195,21 +212,21 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (Answer, error) {
 		s.saveInteraction(ctx, Interaction{
 			Principal:      req.Principal,
 			ConversationID: req.ConversationID,
-			Provider:       s.provider.Name(),
-			Model:          s.opts.Model,
+			Provider:       provider.Name(),
+			Model:          opts.Model,
 			Prompt:         prompt,
 			Latency:        latency,
 			Status:         StatusError,
-			ErrorMessage:   security.RedactString(err.Error(), s.opts.Secrets...),
-		})
+			ErrorMessage:   security.RedactString(err.Error(), opts.Secrets...),
+		}, opts.SaveHistory)
 		return Answer{}, err
 	}
 
 	answer := Answer{
 		ShortAnswer: strings.TrimSpace(providerResp.ShortAnswer),
 		FullAnswer:  strings.TrimSpace(providerResp.FullAnswer),
-		Provider:    firstNonEmpty(providerResp.Provider, s.provider.Name()),
-		Model:       firstNonEmpty(providerResp.Model, s.opts.Model),
+		Provider:    firstNonEmpty(providerResp.Provider, provider.Name()),
+		Model:       firstNonEmpty(providerResp.Model, opts.Model),
 		Latency:     latency,
 	}
 
@@ -223,14 +240,15 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (Answer, error) {
 		FullAnswer:     answer.FullAnswer,
 		Latency:        answer.Latency,
 		Status:         StatusOK,
-	})
+	}, opts.SaveHistory)
 
 	return answer, nil
 }
 
 // LatestAnswer returns the most recent saved answer owned by principal.
 func (s *Service) LatestAnswer(ctx context.Context, principal Principal) (Answer, error) {
-	if !principal.Valid() || !s.opts.SaveHistory || s.repository == nil {
+	opts, _ := s.inferenceSnapshot()
+	if !principal.Valid() || !opts.SaveHistory || s.repository == nil {
 		return Answer{}, ErrNoHistory
 	}
 
@@ -257,13 +275,19 @@ func (s *Service) LatestAnswer(ctx context.Context, principal Principal) (Answer
 	}, nil
 }
 
-func (s *Service) saveInteraction(ctx context.Context, interaction Interaction) {
-	if !s.opts.SaveHistory || s.repository == nil {
+func (s *Service) saveInteraction(ctx context.Context, interaction Interaction, saveHistory bool) {
+	if !saveHistory || s.repository == nil {
 		return
 	}
 	if _, err := s.repository.SaveInteraction(ctx, interaction); err != nil {
 		slog.WarnContext(ctx, "save interaction", "error", err)
 	}
+}
+
+func (s *Service) inferenceSnapshot() (Options, Provider) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.opts, s.provider
 }
 
 func normalizeProviderError(err error) error {

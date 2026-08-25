@@ -153,6 +153,12 @@ func (e endpoint) postJSON(ctx context.Context, providerPath string, headers map
 	if err != nil {
 		return 0, latency, fmt.Errorf("call provider: %w", err)
 	}
+	// Extremely fast in-memory transports can complete inside one clock tick.
+	// A successful call still has a measured duration, and downstream status
+	// views use zero to mean "not measured".
+	if latency <= 0 {
+		latency = time.Nanosecond
+	}
 	if httpResp.Body == nil {
 		return 0, latency, errors.New("provider response body is missing")
 	}

@@ -1,0 +1,159 @@
+package config
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+const runtimeSettingsVersion = 1
+
+// RuntimeSettings is the non-secret inference configuration managed by the
+// local dashboard. API keys are deliberately absent: credentials continue to
+// come from environment variables or explicitly configured secret files.
+type RuntimeSettings struct {
+	Version   int                     `json:"version"`
+	Provider  string                  `json:"provider"`
+	OpenAI    OpenAIRuntimeSettings   `json:"openai"`
+	Anthropic ProviderRuntimeSettings `json:"anthropic"`
+}
+
+// ProviderRuntimeSettings contains settings shared by inference providers.
+type ProviderRuntimeSettings struct {
+	Model           string `json:"model"`
+	BaseURL         string `json:"base_url,omitempty"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
+	TimeoutSeconds  int    `json:"timeout_seconds"`
+}
+
+// OpenAIRuntimeSettings extends the shared settings with current Responses
+// API controls supported by the GPT-5.6 model family.
+type OpenAIRuntimeSettings struct {
+	ProviderRuntimeSettings
+	ReasoningEffort string `json:"reasoning_effort"`
+	TextVerbosity   string `json:"text_verbosity"`
+}
+
+// RuntimeSettingsFromConfig returns the persistable subset of cfg.
+func RuntimeSettingsFromConfig(cfg *Config) RuntimeSettings {
+	return RuntimeSettings{
+		Version:  runtimeSettingsVersion,
+		Provider: cfg.Provider,
+		OpenAI: OpenAIRuntimeSettings{
+			ProviderRuntimeSettings: ProviderRuntimeSettings{
+				Model:           cfg.OpenAI.Model,
+				BaseURL:         cfg.OpenAI.BaseURL,
+				MaxOutputTokens: cfg.OpenAI.MaxOutputTokens,
+				TimeoutSeconds:  durationSeconds(cfg.OpenAI.Timeout),
+			},
+			ReasoningEffort: cfg.OpenAI.ReasoningEffort,
+			TextVerbosity:   cfg.OpenAI.TextVerbosity,
+		},
+		Anthropic: ProviderRuntimeSettings{
+			Model:           cfg.Anthropic.Model,
+			BaseURL:         cfg.Anthropic.BaseURL,
+			MaxOutputTokens: cfg.Anthropic.MaxOutputTokens,
+			TimeoutSeconds:  durationSeconds(cfg.Anthropic.Timeout),
+		},
+	}
+}
+
+// SaveRuntimeSettings persists only non-secret settings. The parent directory
+// is the same private directory used for SQLite in normal deployments.
+func SaveRuntimeSettings(path string, settings RuntimeSettings) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("runtime settings path is unavailable")
+	}
+	settings.Version = runtimeSettingsVersion
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode runtime settings: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("create runtime settings directory: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write runtime settings: %w", err)
+	}
+	return nil
+}
+
+func (c *Config) applyRuntimeSettingsFile() error {
+	c.RuntimeSettingsPath = resolveRuntimeSettingsPath(c.RuntimeSettingsPath, c.SQLitePath)
+	if c.RuntimeSettingsPath == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(c.RuntimeSettingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read runtime settings: %w", err)
+	}
+
+	var settings RuntimeSettings
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&settings); err != nil {
+		return fmt.Errorf("decode runtime settings: %w", err)
+	}
+	if settings.Version != runtimeSettingsVersion {
+		return fmt.Errorf("runtime settings version must be %d", runtimeSettingsVersion)
+	}
+	c.applyRuntimeSettings(settings)
+	return nil
+}
+
+func (c *Config) applyRuntimeSettings(settings RuntimeSettings) {
+	if provider := strings.ToLower(strings.TrimSpace(settings.Provider)); provider != "" {
+		c.Provider = provider
+	}
+	applyProviderRuntime(&c.OpenAI.Model, &c.OpenAI.BaseURL, &c.OpenAI.MaxOutputTokens, &c.OpenAI.Timeout, settings.OpenAI.ProviderRuntimeSettings)
+	// Empty values intentionally restore the provider's own defaults. This is
+	// especially important for OpenAI-compatible servers that do not implement
+	// OpenAI's reasoning or text-verbosity request extensions.
+	c.OpenAI.ReasoningEffort = strings.ToLower(strings.TrimSpace(settings.OpenAI.ReasoningEffort))
+	c.OpenAI.TextVerbosity = strings.ToLower(strings.TrimSpace(settings.OpenAI.TextVerbosity))
+	applyProviderRuntime(&c.Anthropic.Model, &c.Anthropic.BaseURL, &c.Anthropic.MaxOutputTokens, &c.Anthropic.Timeout, settings.Anthropic)
+}
+
+func applyProviderRuntime(model, baseURL *string, maxOutputTokens *int, timeout *time.Duration, settings ProviderRuntimeSettings) {
+	if value := strings.TrimSpace(settings.Model); value != "" {
+		*model = value
+	}
+	// An explicitly empty base URL restores the provider default.
+	*baseURL = strings.TrimSpace(settings.BaseURL)
+	if settings.MaxOutputTokens > 0 {
+		*maxOutputTokens = settings.MaxOutputTokens
+	}
+	if settings.TimeoutSeconds > 0 {
+		*timeout = time.Duration(settings.TimeoutSeconds) * time.Second
+	}
+}
+
+func resolveRuntimeSettingsPath(configured, sqlitePath string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	sqlitePath = strings.TrimSpace(sqlitePath)
+	if sqlitePath == "" || sqlitePath == ":memory:" || strings.HasPrefix(sqlitePath, "file:") {
+		return ""
+	}
+	extension := filepath.Ext(sqlitePath)
+	base := strings.TrimSuffix(sqlitePath, extension)
+	return base + ".settings.json"
+}
+
+func durationSeconds(value time.Duration) int {
+	if value <= 0 {
+		return 0
+	}
+	return int(value / time.Second)
+}
