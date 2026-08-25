@@ -164,11 +164,20 @@ Code and model:
 
 Alexa platform:
 
-- [ ] Model builds in the selected locale.
-- [ ] Launch delegation is accepted.
-- [ ] Full follow-up utterance fills `Query`.
+- [x] Model builds in the selected locale.
+- [x] Launch delegation is accepted.
+- [x] Full follow-up utterance fills `Query`.
 - [ ] Current one-shot phrases work on a real Echo.
 - [ ] Activity history is reviewed for recognition failures.
+
+Beta test:
+
+- [x] Store metadata and skill icons are complete.
+- [x] Privacy and compliance declarations are complete.
+- [x] Required certification validation succeeds.
+- [x] The 90-day beta test is running.
+- [ ] The beta invitation is accepted by the Amazon account registered to the Echo.
+- [ ] Launch and question flows are verified on the enrolled Echo.
 
 ## Provider Review
 
