@@ -230,7 +230,7 @@ func TestHandleIndexUsesOneTabbedProviderPanel(t *testing.T) {
 	dashboard.HandleIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?section=inference&provider=anthropic", http.NoBody))
 
 	body := rec.Body.String()
-	if !strings.Contains(body, `class="panel provider-manager"`) || !strings.Contains(body, `id="anthropic-provider-title"`) {
+	if !strings.Contains(body, `class="provider-manager"`) || !strings.Contains(body, `id="anthropic-provider-title"`) {
 		t.Fatal("Anthropic provider tab was not rendered in the integrated manager")
 	}
 	if strings.Contains(body, `id="openai-provider-title"`) {
@@ -278,5 +278,10 @@ func TestHandleStylesServesEmbeddedCSS(t *testing.T) {
 	dashboard.HandleStyles(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/assets/dashboard.css", http.NoBody))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), ".app-shell") {
 		t.Fatalf("stylesheet response = %d %q", rec.Code, rec.Body.String())
+	}
+	for _, disallowed := range []string{"linear-gradient", "radial-gradient", "box-shadow:", "backdrop-filter", ".panel {"} {
+		if strings.Contains(rec.Body.String(), disallowed) {
+			t.Errorf("stylesheet still contains decorative card effect %q", disallowed)
+		}
 	}
 }

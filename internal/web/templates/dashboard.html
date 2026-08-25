@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{{.PageTitle}} · Brainslug</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=2">
+  <link rel="stylesheet" href="/assets/dashboard.css?v=3">
 </head>
 <body>
   <div class="app-shell">
@@ -73,13 +73,13 @@
         {{if .FormError}}<div class="notice notice-error" role="alert">{{.FormError}}</div>{{end}}
 
         {{if eq .Section "overview"}}
-        <section class="hero hero-{{.System.Tone}}" aria-labelledby="system-verdict">
-          <div class="hero-copy">
+        <section class="overview-status status-{{.System.Tone}}" aria-labelledby="system-verdict">
+          <div class="status-copy">
             <p class="eyebrow">System verdict</p>
             <h2 id="system-verdict">{{.System.Verdict}}</h2>
             <p>{{.System.Detail}}</p>
           </div>
-          <div class="health-grid" aria-label="System checks">
+          <div class="system-checks" aria-label="System checks">
             <div class="health-item">
               <span class="health-icon {{if .System.AlexaVerification}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
               <div><strong>Alexa verification</strong><span>{{if .System.AlexaVerification}}Enforced{{else}}Disabled{{end}}</span></div>
@@ -99,15 +99,15 @@
           </div>
         </section>
 
-        <section class="metric-grid" aria-label="Interaction metrics">
-          <article class="metric-card"><span>Requests loaded</span><strong>{{.Stats.Total}}</strong><small>Latest 100 records</small></article>
-          <article class="metric-card"><span>Success rate</span><strong>{{.Stats.SuccessRate}}</strong><small>{{.Stats.Errors}} errors</small></article>
-          <article class="metric-card"><span>Average latency</span><strong>{{.Stats.AverageMS}}</strong><small>P95 {{.Stats.P95MS}}</small></article>
-          <article class="metric-card"><span>Last activity</span><strong class="metric-text">{{.Stats.LastActivity}}</strong><small>Stored locally</small></article>
+        <section class="metrics-band" aria-label="Interaction metrics">
+          <article class="metric"><span>Requests loaded</span><strong>{{.Stats.Total}}</strong><small>Latest 100 records</small></article>
+          <article class="metric"><span>Success rate</span><strong>{{.Stats.SuccessRate}}</strong><small>{{.Stats.Errors}} errors</small></article>
+          <article class="metric"><span>Average latency</span><strong>{{.Stats.AverageMS}}</strong><small>P95 {{.Stats.P95MS}}</small></article>
+          <article class="metric"><span>Last activity</span><strong class="metric-text">{{.Stats.LastActivity}}</strong><small>Stored locally</small></article>
         </section>
 
-        <div class="overview-grid">
-          <section class="panel provider-summary" aria-labelledby="provider-summary-title">
+        <div class="overview-columns">
+          <section class="overview-section provider-summary" aria-labelledby="provider-summary-title">
             <div class="section-heading">
               <div><p class="eyebrow">Active route</p><h2 id="provider-summary-title">{{.ActiveProvider.Name}}</h2></div>
               <a class="text-link" href="/?section=inference">Manage</a>
@@ -127,7 +127,7 @@
             </dl>
           </section>
 
-          <section class="panel recent-panel" aria-labelledby="recent-title">
+          <section class="overview-section recent-panel" aria-labelledby="recent-title">
             <div class="section-heading">
               <div><p class="eyebrow">Latest turns</p><h2 id="recent-title">Recent activity</h2></div>
               <a class="text-link" href="/?section=activity">View all</a>
@@ -149,7 +149,7 @@
         </div>
 
         {{else if eq .Section "activity"}}
-        <section class="panel activity-panel" aria-labelledby="activity-title">
+        <section class="activity-panel" aria-labelledby="activity-title">
           <div class="section-heading activity-heading">
             <div><p class="eyebrow">History</p><h2 id="activity-title">Stored interactions</h2></div>
             <a class="button button-secondary" href="/history?limit=100">Open JSON</a>
@@ -191,7 +191,7 @@
         </section>
 
         {{else}}
-        <section class="panel provider-manager" aria-labelledby="provider-manager-title">
+        <section class="provider-manager" aria-labelledby="provider-manager-title">
           <header class="manager-header">
             <div>
               <p class="eyebrow">Model manager</p>
@@ -211,7 +211,7 @@
 
           {{if eq .ProviderTab "openai"}}
           <div class="provider-panel" role="tabpanel" aria-labelledby="openai-provider-title">
-            <div class="provider-panel-head">
+            <aside class="provider-context">
               <div class="provider-identity">
                 <span class="provider-monogram" aria-hidden="true">O</span>
                 <span><h3 id="openai-provider-title">OpenAI / compatible</h3><small>{{.Inference.OpenAI.EndpointKind}}</small></span>
@@ -220,7 +220,7 @@
                 <span class="health-icon {{if .Inference.OpenAI.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
                 <span><strong>{{if .Inference.OpenAI.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.OpenAI.CredentialSource}}</small></span>
               </div>
-            </div>
+            </aside>
             <form class="provider-form" method="post" action="/settings/provider">
               <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
               <input type="hidden" name="section" value="inference">
@@ -244,7 +244,7 @@
           </div>
           {{else}}
           <div class="provider-panel" role="tabpanel" aria-labelledby="anthropic-provider-title">
-            <div class="provider-panel-head">
+            <aside class="provider-context">
               <div class="provider-identity">
                 <span class="provider-monogram provider-monogram-alt" aria-hidden="true">A</span>
                 <span><h3 id="anthropic-provider-title">Anthropic</h3><small>{{.Inference.Anthropic.EndpointKind}}</small></span>
@@ -253,7 +253,7 @@
                 <span class="health-icon {{if .Inference.Anthropic.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
                 <span><strong>{{if .Inference.Anthropic.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.Anthropic.CredentialSource}}</small></span>
               </div>
-            </div>
+            </aside>
             <form class="provider-form" method="post" action="/settings/provider">
               <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
               <input type="hidden" name="section" value="inference">
