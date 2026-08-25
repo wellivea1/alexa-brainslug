@@ -7,7 +7,7 @@ Alexa Brainslug accepts internet-originated requests, can spend money through pr
 Implemented:
 
 - ASK request signature verification.
-- Amazon signing-certificate URL allowlisting and normalization.
+- Amazon signing-certificate URL allowlisting and canonicalization.
 - Bounded certificate retrieval, redirect validation, and cache.
 - Certificate-chain and Alexa signing-name validation.
 - Request timestamp freshness enforcement.
@@ -60,9 +60,9 @@ ASK and future MCP authentication are separate systems and must not share a sing
 The verifier processes the exact raw request body and performs these checks:
 
 1. Read `SignatureCertChainUrl` and `Signature-256`.
-2. Normalize the certificate URL.
+2. Canonicalize the certificate URL by removing dot segments, duplicate slashes, and fragments.
 3. Require HTTPS, host `s3.amazonaws.com`, port 443, and the Alexa `/echo.api/` path prefix.
-4. Reject credentials, fragments, invalid ports, dot segments, duplicate slashes, and redirects outside the same allowed URL rules.
+4. Reject credentials, invalid ports, and any canonical path outside the allowed certificate location.
 5. Fetch the certificate with bounded time and response size.
 6. Parse the PEM chain.
 7. Verify the chain against trusted roots.
@@ -123,7 +123,7 @@ ADMIN_SERVER_ADDR=127.0.0.1:8081
 
 Docker binds both back to host loopback. The reverse proxy or tunnel reaches port 8080 only.
 
-The administrative listener contains private prompts and answers and has no remote-user authentication. Do not publish port 8081.
+The administrative listener contains private prompts and answers and has no remote-user authentication. Do not publish port 8081. An explicit non-loopback `ADMIN_SERVER_ADDR` is permitted for container networking and must be protected by the deployment topology, such as Docker's host-loopback port mapping.
 
 The public hostname should return 404 for:
 
