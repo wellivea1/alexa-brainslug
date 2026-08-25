@@ -12,7 +12,7 @@ Brainslug is ready. What should I ask?
 <free-form question>
 ```
 
-The interaction model and response types now implement this two-turn design. The remaining gate is validation in the Alexa Developer Console and on a physical Echo.
+The interaction model and response types implement this two-turn design. The model builds in the Developer Console, and signed launch and intent requests pass; spoken recognition and the complete conversational exchange still need a physical Echo test.
 
 ## Adapter Boundary
 
@@ -97,7 +97,7 @@ Alexa: Brainslug is ready. What should I ask?
 User:  Explain why disappearing polymorphs are difficult to reproduce.
 ```
 
-The Developer Console must confirm that launch-to-dialog delegation is accepted for the selected locale and that the full follow-up utterance fills `Query`.
+Developer Console HTTPS invocation confirms that launch-to-dialog delegation and a filled `Query` intent are accepted for the selected locale. The conversational simulator and a physical Echo must still confirm that spoken follow-up utterances resolve to that intent and slot.
 
 If Amazon requires a different launch-chaining shape, change the checked-in response and interaction model together and add a fixture test.
 

@@ -154,7 +154,7 @@ The verifier checks:
 - timestamp freshness;
 - skill application ID.
 
-The verifier is unit-tested but has not yet been validated against a real Amazon-signed request in this environment. Use a controlled initial deployment and inspect failures locally.
+The verifier is unit-tested and has passed Amazon-signed Developer Console requests in a controlled tunnel test. Continue to inspect failures locally and keep verification enabled.
 
 `ALEXA_VERIFY_REQUESTS=false` is only for local fixture tests with no public route. Do not use it as an operational mode.
 
@@ -193,7 +193,6 @@ The listener split and ASK verifier remove the two largest original exposure def
 - per-principal rate limits;
 - bounded provider concurrency;
 - a global request or spend cap;
-- real Amazon-signed request validation;
 - retention appropriate to the stored prompts and answers.
 
 Until those exist, keep the deployment private and monitored rather than treating it as a public service.
@@ -225,12 +224,12 @@ Before an Alexa test:
 - [ ] Port 8081 is not public.
 - [ ] `ALEXA_ALLOWED_SKILL_ID` is set.
 - [ ] `ALEXA_VERIFY_REQUESTS=true`.
-- [ ] The interaction model builds in the Developer Console.
+- [x] The interaction model builds in the Developer Console.
 
 Before continuous use:
 
-- [ ] Real signed requests pass the verifier.
-- [ ] Invalid and stale requests fail before provider use.
+- [x] Real signed requests pass the verifier.
+- [x] Invalid and stale requests fail before provider use.
 - [ ] Rate limits exist.
 - [ ] Provider concurrency is bounded.
 - [ ] A global cap prevents uncontrolled spend.

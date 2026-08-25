@@ -14,13 +14,13 @@ It does not configure Alexa+ MCP. Alexa+ is a separate partner-gated integration
 - Real skill ID configured in `ALEXA_ALLOWED_SKILL_ID`.
 - `ALEXA_VERIFY_REQUESTS=true`.
 
-The custom request verifier is implemented and unit-tested, but a real Amazon-signed request still must be validated.
+The custom request verifier is implemented, unit-tested, and validated against Amazon-signed Developer Console requests. Physical Echo recognition remains an external gate.
 
 ## Create The Skill
 
 1. Open the Alexa Developer Console.
 2. Select **Create Skill**.
-3. Enter a development name such as `Alexa Brainslug`.
+3. Enter a development name such as `Brainslug`.
 4. Select the locale used by the test Echo.
 5. Choose a custom skill model.
 6. Choose the option that permits your own HTTPS endpoint.
@@ -73,7 +73,7 @@ Alexa, ask Brain Slug regarding SQLite write-ahead logging
 Alexa, tell Brain Slug to answer this question: why is the sky blue
 ```
 
-The exact phrases that Alexa recognizes must be verified in the Developer Console and on the real Echo.
+The model and HTTPS invocation path can be verified with Developer Console requests. Exact spoken recognition must still be verified in the conversational simulator and on the real Echo.
 
 ## Configure The HTTPS Endpoint
 

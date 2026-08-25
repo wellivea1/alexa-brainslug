@@ -54,11 +54,13 @@ Coverage is diagnostic, not a quota. A changed behavior needs a test that would 
 - [ ] Retention and deletion.
 - [ ] MCP runtime adapter.
 
-### External validation still required
+### External validation status
 
 - [ ] CI runner completes all configured jobs.
-- [ ] Interaction model builds in Alexa Developer Console.
-- [ ] Real Amazon-signed request passes the verifier.
+- [x] Race-enabled tests pass locally with CGO and a Windows C compiler.
+- [x] Interaction model builds in Alexa Developer Console.
+- [x] Real Amazon-signed request passes the verifier.
+- [x] Developer Console question and last-response requests complete through provider and SQLite history.
 - [ ] Physical Echo completes the two-turn flow.
 
 ## Application-Core Review
@@ -126,10 +128,10 @@ Unit tests:
 
 Real environment:
 
-- [ ] Valid Amazon production request.
-- [ ] Alexa Developer Console request.
+- [x] Valid Amazon production request.
+- [x] Alexa Developer Console request.
 - [ ] Physical Echo request.
-- [ ] Host clock and outbound certificate-fetch behavior confirmed.
+- [x] Host clock and outbound certificate-fetch behavior confirmed.
 
 ## Listener Isolation Review
 

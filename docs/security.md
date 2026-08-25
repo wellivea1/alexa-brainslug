@@ -21,7 +21,6 @@ Implemented:
 
 Still required before treating the service as continuously public:
 
-- validation against an actual Amazon-signed request;
 - per-principal and network rate limits;
 - bounded provider concurrency;
 - a global request or spend cap;
@@ -82,9 +81,9 @@ Failure behavior:
 
 Unit tests generate local certificate chains and signed bodies so the verifier can be tested without Amazon network access.
 
-### Remaining validation
+### Runtime validation
 
-The implementation still needs a real request from the Alexa Developer Console or physical device. Unit-generated certificate chains demonstrate the verifier logic, but they do not prove that every Amazon production detail was modeled correctly.
+The verifier has accepted Amazon-signed Developer Console requests with certificate retrieval, chain validation, timestamp checking, and exact skill-ID enforcement enabled. Generated-certificate unit tests continue to cover negative cases; a physical Echo test remains required for device recognition and the complete conversational flow.
 
 Do not disable verification to work around a real-request incompatibility. Capture a sanitized failure, identify the mismatch, and add a regression test.
 
@@ -327,7 +326,7 @@ If prompts or answers may have been exposed, treat it as a private-data incident
 
 ## Continuous-Use Exit Criteria
 
-- [ ] Real Amazon-signed request passes verification.
+- [x] Real Amazon-signed request passes verification.
 - [ ] Tampered, stale, foreign-skill, and invalid-certificate requests fail before application execution.
 - [ ] Public and administrative listeners remain isolated.
 - [ ] Port 8081 is not publicly routed.

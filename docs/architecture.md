@@ -328,8 +328,6 @@ Implemented test layers include:
 
 Still required:
 
-- actual Alexa Developer Console model build;
-- actual Amazon-signed request verification;
 - physical Echo invocation and recognition tests;
 - deferred-job and restart-recovery tests once that layer exists.
 
@@ -349,7 +347,7 @@ Still required:
 
 - Principal scoping: namespaced in the application, legacy-compatible in SQLite.
 - Provider timing: bounded for synchronous ASK, but no deferred path.
-- Security: authenticated ingress exists, but rate limits, spend caps, and real signed-request validation remain.
+- Security: authenticated ingress has passed an Amazon-signed Developer Console request, but rate limits and spend caps remain.
 
 ### Not started
 

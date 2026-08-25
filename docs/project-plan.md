@@ -59,10 +59,8 @@ Not implemented:
 - retention and deletion;
 - MCP runtime code.
 
-Not externally validated:
+External validation remaining:
 
-- Alexa Developer Console interaction-model build;
-- actual Amazon-signed request verification;
 - physical Echo recognition and complete round trip.
 
 ## Ordering Principle
@@ -122,7 +120,7 @@ Exit criteria:
 - Public `/`, `/history`, and `/health` remain unreachable.
 - Invocation phrases that actually work are recorded.
 
-Status: external validation required.
+Status: Developer Console model build, signed launch, question, and history recall validated; physical Echo validation remains.
 
 ## Phase 1: Extract The Application Core
 
@@ -164,7 +162,6 @@ Completed implementation:
 
 Outstanding:
 
-- real Amazon-signed request validation;
 - per-source and per-principal rate limits;
 - bounded provider concurrency;
 - global request or spend cap;
@@ -178,7 +175,7 @@ Exit criteria:
 - rate limits and a global cap fail closed;
 - provider concurrency is bounded.
 
-Status: verifier and listener isolation implemented; operational limits and real-runtime validation outstanding.
+Status: verifier and listener isolation implemented and validated with Amazon-signed Developer Console requests; operational limits remain outstanding.
 
 ## Phase 3: ASK Usability And Deferred Work
 
@@ -194,7 +191,6 @@ Completed implementation:
 
 Outstanding:
 
-- Developer Console model build;
 - real Echo recognition testing;
 - wording adjustment based on actual device behavior.
 

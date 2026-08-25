@@ -59,7 +59,7 @@ No MCP server is implemented today.
 
 ## Not Yet Implemented Or Validated
 
-- Real Alexa Developer Console and physical Echo validation of a signed request.
+- Physical Echo recognition and complete conversational two-turn validation.
 - Durable deferred/background jobs for slow reasoning requests.
 - Request idempotency and restart recovery.
 - Pending, completed, failed, and canceled job status retrieval.
@@ -70,7 +70,7 @@ No MCP server is implemented today.
 
 The current provider path is synchronous. Provider timeouts default to six seconds so the service has a chance to return inside Alexa's external request budget. A slow reasoning request can still fail. The proper long-term fix is a durable deferred-job path, not a longer ASK timeout.
 
-Request verification is implemented and unit-tested, but the current branch has not been validated against an actual Amazon-signed request. Keep the public route controlled until that test succeeds. Continuous exposure also requires rate limits and a spend cap.
+Request verification has passed an Amazon-signed request from the Alexa Developer Console with verification enabled. Keep the public route controlled: continuous exposure still requires rate limits, bounded provider concurrency, and a spend cap.
 
 ## Repository Layout
 
@@ -253,7 +253,7 @@ Alexa, ask Brain Slug regarding SQLite write-ahead logging
 Alexa, tell Brain Slug to answer this question: why is the sky blue
 ```
 
-Exact recognition still requires Developer Console and physical-device testing.
+The interaction model builds in the Developer Console, and signed launch, question, and last-response requests pass there. Exact spoken recognition still requires conversational-simulator and physical-device testing.
 
 See [docs/alexa-skill-setup.md](docs/alexa-skill-setup.md) and [docs/invocation-design.md](docs/invocation-design.md).
 
@@ -306,7 +306,7 @@ See [docs/security.md](docs/security.md).
 
 ## Next Implementation Phases
 
-1. Validate the interaction model and signed request verifier against the Alexa Developer Console and a physical Echo.
+1. Validate spoken recognition and the complete conversational flow on a physical Echo.
 2. Add per-principal limits and a global spend cap.
 3. Add durable jobs, request idempotency, bounded background workers, and restart recovery.
 4. Make `last response` distinguish pending, completed, and failed jobs.
