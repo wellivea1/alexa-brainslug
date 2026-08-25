@@ -253,7 +253,7 @@ Alexa, ask Brain Slug regarding SQLite write-ahead logging
 Alexa, tell Brain Slug to answer this question: why is the sky blue
 ```
 
-The interaction model builds in the Developer Console, and signed launch, question, and last-response requests pass there. Exact spoken recognition still requires conversational-simulator and physical-device testing.
+The interaction model builds in the Developer Console, signed launch, question, and last-response requests pass there, and a beta-enrolled physical Echo completes the launch and question flow. Broader one-shot recognition coverage still requires device testing.
 
 See [docs/alexa-skill-setup.md](docs/alexa-skill-setup.md) and [docs/invocation-design.md](docs/invocation-design.md).
 

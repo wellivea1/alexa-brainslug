@@ -98,7 +98,7 @@ Current code support:
 - signed request verifier exists;
 - public route is isolated;
 - dialog flow exists;
-- physical-device test has not been performed in this environment.
+- a beta-enrolled physical Echo completes the launch and question flow.
 
 Procedure:
 
@@ -120,7 +120,7 @@ Exit criteria:
 - Public `/`, `/history`, and `/health` remain unreachable.
 - Invocation phrases that actually work are recorded.
 
-Status: Developer Console model build, signed launch, question, and history recall validated; physical Echo validation remains.
+Status: Developer Console model build, signed launch, question, and history recall validated; a beta-enrolled physical Echo also completes the launch and question flow. Broader one-shot recognition coverage remains.
 
 ## Phase 1: Extract The Application Core
 

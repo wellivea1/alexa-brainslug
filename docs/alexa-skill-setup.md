@@ -321,6 +321,12 @@ The model did not return inside the synchronous voice budget. Lower latency for 
 
 Use the two-turn flow. Then adjust only the smallest set of carrier phrases supported by real activity-history evidence.
 
+### The beta is active but absent from Your Skills
+
+Confirm that the beta invitation was accepted in the iOS or Android Alexa app by the same Amazon consumer account and marketplace registered to the Echo. An identical email address can belong to separate Amazon marketplace accounts; for example, a beta link can authenticate against an Amazon.co.jp account even after the developer used Amazon.com. A Developer Console session therefore does not prove that the mobile Alexa account received the beta entitlement.
+
+Add the intended consumer account as a beta tester, open the invitation on the mobile device that has the Alexa app, verify the Amazon marketplace before accepting, and then confirm that Brainslug appears in Your Skills.
+
 ## Development Versus Distribution
 
 A development-stage private skill can be tested on the owner's Alexa account without public Skill Store publication.

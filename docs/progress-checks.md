@@ -176,8 +176,8 @@ Beta test:
 - [x] Privacy and compliance declarations are complete.
 - [x] Required certification validation succeeds.
 - [x] The 90-day beta test is running.
-- [ ] The beta invitation is accepted by the Amazon account registered to the Echo.
-- [ ] Launch and question flows are verified on the enrolled Echo.
+- [x] The beta invitation is accepted by the Amazon account registered to the Echo.
+- [x] Launch and question flows are verified on the enrolled Echo.
 
 ## Provider Review
 

@@ -328,7 +328,7 @@ Implemented test layers include:
 
 Still required:
 
-- physical Echo invocation and recognition tests;
+- broader physical Echo invocation and recognition regression tests;
 - deferred-job and restart-recovery tests once that layer exists.
 
 ## Implementation Status

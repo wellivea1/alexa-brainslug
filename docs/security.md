@@ -83,7 +83,7 @@ Unit tests generate local certificate chains and signed bodies so the verifier c
 
 ### Runtime validation
 
-The verifier has accepted Amazon-signed Developer Console requests with certificate retrieval, chain validation, timestamp checking, and exact skill-ID enforcement enabled. Generated-certificate unit tests continue to cover negative cases; a physical Echo test remains required for device recognition and the complete conversational flow.
+The verifier has accepted Amazon-signed Developer Console requests with certificate retrieval, chain validation, timestamp checking, and exact skill-ID enforcement enabled. A beta-enrolled physical Echo has also completed the launch and question flow. Generated-certificate unit tests continue to cover negative cases.
 
 Do not disable verification to work around a real-request incompatibility. Capture a sanitized failure, identify the mismatch, and add a regression test.
 
