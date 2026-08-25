@@ -1,211 +1,370 @@
 # Project Plan
 
-## Reviewed Inputs
-
-- Original project request in this repo's attachment.
-- The ChatGPT conversation the project began with, by way of the Codex session
-  summary. The conversation itself is no longer accessible; nothing in it is
-  known to survive outside this repo.
-- Current Alexa Brainslug code and tests.
-- Prior-art reviews of `jackmcguire1/alexa-chatgpt` and NoobBoard.
-
 ## Goal
 
-Route a hard question to a model chosen explicitly, and hear the answer back
-through an Echo. Alexa answers the easy things itself; this exists for the
-questions worth spending reasoning tokens on, where the value is deterministic
-control over which model responds.
+Build a reliable private voice path from Alexa to an explicitly selected AI model while keeping Alexa as an adapter rather than the application architecture.
 
-Alexa calls a public HTTPS endpoint, the local Go service verifies and routes
-the request, the selected provider answers, Alexa speaks a concise version, and
-the full answer is stored locally.
+The current product is a classic ASK custom skill. The target is:
 
-Supported providers are the OpenAI API and the Anthropic API.
+```text
+ASK adapter
+  -> transport-neutral application service
+  -> explicit provider and SQLite adapters
+```
 
-Voice is the only intended interface. The dashboard exists for development and
-testing and is not a product surface.
+A future MCP adapter is optional and gated. It must not delay the ASK path, and it must not be designed as a generic alternate-assistant relay.
 
-### Distribution
+## Product Position
 
-Store publication is an intended direction. It is not scheduled, and it changes
-the threat model rather than extending it: every user's questions would bill one
-API key, strangers' prompts would land in SQLite on a home machine, and a home
-internet connection would become an availability commitment.
+Brainslug exists for questions where deterministic provider and model choice matters more than Alexa's default answer path.
 
-Nothing below depends on that decision. Build as though it is public -
-verification, rate limiting, per-user scoping, retention - and treat submission
-as a separate call made later, once metering and hosting exist.
+Current intended user:
+
+- One owner.
+- Private Alexa account.
+- Self-hosted service.
+- Local history.
+- Explicit provider and model configuration.
+
+Not currently planned as a product surface:
+
+- Public Skill Store availability.
+- Shared household history without explicit identity rules.
+- An open web API.
+- A public Alexa+ add-on.
+- External control of Alexa through MCP.
+
+Store publication and Alexa+ distribution are separate later decisions. They require different hosting, privacy, metering, identity, and certification work.
 
 ## Current State
 
 Implemented:
 
 - Go HTTP server with `/health`, `/alexa`, `/history`, and `/`.
-- Alexa request/response routing for launch, ask, last response, help, fallback,
-  stop, cancel, repeat, and session end.
-- SQLite interaction storage.
-- Minimal local dashboard.
-- Docker Compose and Caddy example.
-- OpenAI provider using the Responses API.
-- Anthropic provider using the Messages API.
-- Provider selection with `AI_PROVIDER=openai|anthropic`.
-- Secret-file support for provider credentials.
-- Browser hardening headers, request body cap, and provider error redaction.
-- Basic unit tests and SQLite integration tests.
+- Alexa request routing for launch, ask, last response, help, fallback, stop, cancel, repeat, and session end.
+- OpenAI Responses API client.
+- Anthropic Messages API client.
+- Explicit provider and model selection.
+- SQLite history and transactional migrations.
+- Local dashboard.
+- Docker Compose and path-scoped Caddy example.
+- Secret-file support and provider-error redaction.
+- Basic tests, linting, CI, race testing, and container startup testing.
 
-Added in the architecture pass:
+Current architectural coupling:
 
-- Versioned, transactional schema migrations.
-- Graceful shutdown, full server timeouts, and a startup path that does not
-  skip its own cleanup.
-- Shared provider HTTP plumbing, so a new provider is its wire format and
-  nothing else.
-- Typed provider errors, so the spoken message can distinguish a
-  misconfiguration from a busy provider from an exhausted token budget.
-- A speech package that shapes model output for a voice, with the Markdown
-  stripping that used to live in the OpenAI provider.
-- Linting, formatting, and CI, including a Docker build that has to start.
+- `internal/alexa.Handler` invokes the provider directly.
+- The Alexa handler selects prompts and constructs persistence records.
+- The Alexa request context is also the provider-call context.
+- Latest-answer semantics are implemented inside the Alexa adapter.
 
-Known gaps, in the order they matter:
+Known blocking gaps:
 
-- No configuration both works and is safe. Verification on rejects Alexa;
-  verification off leaves an open proxy to a paid API key.
-- Provider timeouts (12s) exceed Alexa's response budget (8s).
-- `MAX_OUTPUT_TOKENS` is shared between reasoning/thinking tokens and visible
-  text. At 600 a reasoning model can return no text at all. The failure is now
-  reported as its own error rather than a generic one, but the default is
-  still wrong.
-- Sample utterances read as whole sentences rather than as the tail of one.
-- `/` and `/history` are unauthenticated and trivially exposed by a
-  whole-origin reverse proxy.
-- `/alexa` has no rate limiting.
-- History has no per-user scoping outside `last response`, and no retention
-  controls.
-- `ANTHROPIC_MODEL` default is legacy.
+- Request verification is a fail-closed placeholder. Verification on rejects Alexa; verification off exposes a paid provider route.
+- ASK has a short response deadline, while provider timeouts default to 12 seconds.
+- Slow work has no durable job state or idempotency.
+- Sample utterances are awkward and slot elicitation is absent.
+- Public and administrative routes share one listener.
+- No application rate limit, spend cap, retention policy, or complete multi-user scoping.
+- Current token defaults can be consumed by model reasoning before any visible answer is produced.
+
+## Ordering Principle
+
+The previous plan put deferred answers ahead of request verification because slow answers are the product's purpose. That ordering is wrong for actual operation. Without verification there is no configuration that is both usable and safe to leave online.
+
+The corrected order is:
+
+1. Prove the real ASK round trip briefly.
+2. Extract the application boundary without changing behavior.
+3. Make ASK ingress safe.
+4. Make slow model use usable.
+5. Complete identity, retention, and operational controls.
+6. Add reusable capabilities only when they are real.
+7. Evaluate MCP only after access and product gates exist.
 
 ## Architecture Principles
 
-- Keep the service local-first and private.
-- Keep the Alexa endpoint narrow: it should only accept Alexa-compatible JSON
-  and return Alexa-compatible JSON.
-- Do not assume LAN-only access works for Alexa.
-- Do not hide the selected provider or model.
-- Store full answers locally, but speak concise answers.
-- Fail closed for security-critical incomplete work.
-- Prefer structural guarantees over documented warnings. A dashboard bound to
-  loopback cannot be exposed by a proxy misconfiguration; a documented warning
-  can be, and was.
-- Prefer boring Go interfaces and explicit env configuration over framework
-  abstractions.
-- Dependencies point inward and never cycle. Packages take narrow option
-  structs rather than importing the configuration package, so each one is
-  testable on its own.
-- One runtime dependency. A SQLite driver earns its place; a vendor SDK for a
-  single HTTP endpoint does not.
+- ASK is the current inbound adapter, not the core.
+- Application use cases own provider execution, job state, identity scoping, and persistence policy.
+- Provider clients are thin outbound adapters and never choose fallback policy.
+- SQLite persists application state but does not decide authorization.
+- Platform request types do not cross into the application package.
+- Model and provider choices remain explicit and visible.
+- Security-critical incomplete work fails closed.
+- Structural isolation is preferred over warnings.
+- Slow work is represented as a job, not as a longer HTTP timeout.
+- Do not build a dynamic tool system before multiple concrete capabilities exist.
+- MCP is an adapter option, not the internal architecture.
+
+See `architecture.md`.
+
+## Phase 0: Prove The Real ASK Round Trip
+
+Purpose: validate the one assumption every later phase depends on.
+
+Procedure:
+
+- Create or use the private custom skill.
+- Point it at a short-lived tunnel.
+- Set `ALEXA_ALLOWED_SKILL_ID`.
+- Temporarily disable verification only for this controlled test.
+- Invoke the skill from the actual Echo.
+- Tear down the public route immediately after the test.
+
+Exit criteria:
+
+- A real device invocation reaches the local service.
+- The request envelope and skill ID are captured as sanitized fixtures.
+- The working invocation phrase is recorded.
+- The tunnel is removed or disabled after the test.
+- No provider credential or raw user ID is committed in a fixture.
+
+Status: not started.
+
+## Phase 1: Extract The Application Core
+
+Purpose: separate the product use cases from ASK before adding asynchronous behavior or another adapter.
+
+Required changes:
+
+- Add a transport-neutral application package, provisionally `internal/app`.
+- Define application request, result, principal, and stable error types.
+- Move provider invocation, prompt selection, result normalization, and persistence orchestration out of `internal/alexa`.
+- Move latest-completed-answer lookup into the application service.
+- Keep existing provider and store implementations as concrete dependencies.
+- Rewire Alexa through a narrow application interface.
+
+Explicit exclusions:
+
+- No MCP package.
+- No generic capability registry.
+- No public API.
+- No background worker yet.
+- No schema change unless required to preserve current behavior.
+
+Exit criteria:
+
+- `internal/alexa` no longer imports provider implementations, prompt policy, or concrete store records.
+- Alexa tests use a fake application service.
+- Application tests use fake provider and repository ports and no Alexa JSON.
+- Existing voice behavior and history behavior remain unchanged.
+- CI remains green.
+
+Status: not started.
+
+## Phase 2: Make ASK Safe To Expose
+
+Purpose: remove the current security blocker before continuous real-device use.
+
+Required changes:
+
+- Implement Alexa certificate URL validation.
+- Validate the certificate chain and Alexa signing constraints.
+- Verify the exact raw request body signature.
+- Enforce timestamp freshness.
+- Enforce `ALEXA_ALLOWED_SKILL_ID`.
+- Return HTTP 400 for failed verification without disclosing the failed check.
+- Split public ASK traffic from administrative traffic.
+- Bind dashboard, history, and health to a loopback-only administrative listener.
+- Add request rate limits and a global provider-spend or request cap.
+
+Exit criteria:
+
+- `ALEXA_VERIFY_REQUESTS=true` works with the Alexa Developer Console and a real Echo.
+- Verification tests cover a valid fixture, tampered body, stale timestamp, wrong certificate host, invalid chain, and wrong skill ID.
+- The public listener exposes only the ASK route.
+- Public requests to `/`, `/history`, and `/health` cannot reach the administrative server even if a proxy rule is broad.
+- Rate limits are tested and observable locally.
+- The service can be left reachable without becoming an unauthenticated paid API proxy.
+
+Status: not started.
+
+## Phase 3: Make The ASK Experience Usable
+
+Purpose: make the project work for the slow, reasoning-heavy questions it was built for.
+
+### Invocation work
+
+- Replace unnatural sample utterances with carrier phrases that read correctly after `ask Brain Slug`.
+- Add dialog slot elicitation for the two-turn flow.
+- Keep explicit invocation as the supported baseline.
+- Do not depend on name-free routing for generic questions.
+
+### Deferred work
+
+- Add explicit accepted, running, completed, failed, and canceled job states.
+- Add adapter request IDs and idempotency.
+- Use a voice deadline shorter than Alexa's external request timeout.
+- Return a completed answer when the provider finishes inside the voice deadline.
+- Otherwise return a pending acknowledgement and continue under an independent job deadline.
+- Add `last response` and status behavior for pending, completed, and failed jobs.
+- Use bounded worker concurrency and defined shutdown recovery.
+
+### Provider policy
+
+- Make reasoning or thinking effort configurable per provider where supported.
+- Set output-token defaults that leave room for both reasoning and visible text.
+- Keep provider and model selection explicit.
+- Keep provider errors categorized without speaking internal diagnostics.
+
+Exit criteria:
+
+- The one-shot phrases in `invocation-design.md` build and work on a real device.
+- `Alexa, open Brain Slug` accepts an unconstrained follow-up question through slot elicitation.
+- Fast requests answer in the same turn.
+- Slow requests return a pending acknowledgement before Alexa times out.
+- Completed deferred work is available through `last response`.
+- A duplicate authenticated ASK request does not trigger a duplicate provider charge.
+- Process shutdown does not leave unexplained permanent `running` jobs.
+
+Status: not started.
+
+## Phase 4: Complete Identity, History, And Retention
+
+Purpose: make the local data model honest before more than one account or adapter can use it.
+
+Required changes:
+
+- Introduce namespaced internal principals rather than treating a raw Alexa ID as the universal key.
+- Derive the stored principal identifier without exposing raw platform identifiers to providers.
+- Scope every history and job read by principal.
+- Add retention by age and maximum count.
+- Add explicit deletion operations.
+- Decide whether full prompts and answers are stored by default.
+- Keep redacted errors separate from user-visible failure categories.
+- Add per-principal quotas if more than one user is enabled.
+
+Exit criteria:
+
+- No history or job query can omit a principal accidentally.
+- Alexa users cannot read each other's history in tests.
+- Retention runs automatically and is testable with a fake clock.
+- Raw platform identifiers are absent from provider requests and logs.
+- The dashboard clearly states which principal scope it is showing.
+
+Status: not started.
+
+## Phase 5: Define Reusable Capabilities
+
+Purpose: expose useful operations without prematurely turning the application into a generic plugin framework.
+
+Start only after the application core and deferred jobs exist.
+
+Candidate application capabilities may include:
+
+- Submit an analysis job.
+- Read the status of the caller's job.
+- Retrieve a completed saved answer.
+- Search the caller's saved answers.
+- Delete the caller's saved answer or history range.
+
+These are internal application operations first. They are not automatically MCP tools and do not imply Alexa+ approval.
+
+Rules:
+
+- Each capability has typed input and output.
+- Each capability declares whether it reads or mutates state.
+- Authorization is enforced in the application layer.
+- Long-running work returns accepted state rather than blocking an adapter indefinitely.
+- No capability silently selects a different provider or model.
+- No generic dynamic `Invoke(name, map[string]any)` entry point unless concrete adapters demonstrate a real need.
+
+Exit criteria:
+
+- ASK and the local administrative surface reuse the same application operations where appropriate.
+- Capability tests contain no ASK or MCP protocol types.
+- Authorization and job ownership are tested at the application boundary.
+
+Status: deferred until Phases 1 through 4 are complete.
+
+## Phase 6: Evaluate An MCP Adapter
+
+Purpose: add an MCP surface only when it is technically and commercially real.
+
+Entry gates:
+
+- Amazon has granted relevant Alexa+ builder access, or another concrete MCP client is the actual target.
+- The target host's protocol version and authentication profile are known.
+- There is a capability set with value beyond forwarding arbitrary prompts to an LLM.
+- The service can satisfy the host's latency requirements.
+- Voice-only behavior exists for every Alexa+ capability.
+- Policy and certification requirements have been reviewed against the exact tool set.
+
+Implementation rules:
+
+- Add MCP as an inbound adapter over application operations.
+- Keep ASK and MCP authentication separate.
+- Map the authenticated OAuth subject to a namespaced principal.
+- Expose narrow tools with typed schemas.
+- Return structured results and stable errors.
+- Do not expose the raw provider interface.
+- Do not publish a production Alexa+ profile centered on `chat(prompt)` or `ask_model(prompt)`.
+- Do not assume MCP provides external control of Alexa.
+
+Latency rule:
+
+- Fast reads and deterministic operations may complete synchronously.
+- Slow model work must return accepted state quickly and use a separate status or retrieval operation if the host experience supports it.
+- Do not block an Alexa+ MCP request on a frontier-model response and hope it stays under Amazon's documented latency target.
+
+Exit criteria:
+
+- MCP protocol tests pass against the target client or official tooling.
+- Service and user authentication are both tested where required.
+- Tool discovery exposes only approved capabilities.
+- Every tool enforces principal scoping.
+- No Alexa protocol type appears in the MCP adapter and no MCP type appears in the application package.
+- The exact production tool set has a written certification rationale.
+
+Status: gated; do not start speculatively.
+
+## Phase 7: Decide Distribution
+
+Private use can stop before this phase.
+
+Public ASK or Alexa+ distribution requires:
+
+- Production hosting outside a home connection.
+- Privacy policy and data-use disclosures.
+- Per-user metering and quotas.
+- Abuse controls and global spend limits.
+- Account deletion and data export or deletion behavior.
+- Availability monitoring.
+- Certification-ready invocation, content, and failure handling.
+- A decision about whether user prompts and model outputs are stored at all.
+
+Exit criteria are intentionally not specified until distribution is chosen. Building all of this for a private single-owner skill would be wasted work.
 
 ## Engineering Standards
 
-The service is meant to run unattended, answer a stranger's question, spend
-money doing it, and keep a record. That is the bar the code is held to, and it
-is why the following are treated as requirements rather than polish.
+The service accepts authenticated internet requests, spends money, and stores private text. The following remain requirements:
 
-- Every failure path is either handled or explicitly and visibly ignored, with
-  a comment saying why. Errors wrap with `%w`; callers that need to
-  distinguish a failure match a sentinel or a typed error.
-- Configuration is validated at startup, and an unparseable value is a startup
-  failure naming the variable rather than a silent default.
-- The process starts and stops cleanly: no `os.Exit` past a defer, signal
-  handling, and a bounded drain on shutdown.
-- Schema changes are versioned, transactional, and append-only.
-- Credentials never reach a log, an error, or the database. Alexa user IDs
-  never reach a provider unhashed.
-- Exported symbols and packages are documented. Comments record why, not what.
-- Linting, formatting, the race detector, and a container that actually starts
-  are enforced by CI, not by review attention.
+- Configuration is explicit and validated at startup.
+- Errors wrap with `%w`; callers match stable sentinels or typed errors.
+- Credentials and raw platform identifiers never reach logs or history.
+- Schema migrations are append-only and transactional.
+- Provider clients use local HTTP test servers.
+- Application tests use fakes, not live APIs.
+- ASK adapter tests use request fixtures and a fake application service.
+- Shutdown is bounded and does not skip cleanup.
+- CI enforces build, vet, race tests, linting, formatting, ASCII, and container startup.
 
-`../CONTRIBUTING.md` is the working version of this list.
+See `../CONTRIBUTING.md` and `progress-checks.md`.
 
-Known deliberate gaps, so they are not mistaken for oversights: there are no
-metrics or tracing, and no structured request IDs. Both are worth adding when
-there is more than one user to correlate across, and neither is worth the
-weight before then.
+## Dropped Or Rejected Approaches
 
-## Phases
+### Generic OpenCode provider
 
-### Phase 0: Prove the Round Trip
+Dropped. It adds another path to a general model response without adding a distinct product capability and cannot fit a normal voice-turn budget reliably.
 
-Before more code. Create the skill in the developer console, point it at a
-temporary tunnel with verification off and `ALEXA_ALLOWED_SKILL_ID` set, and
-confirm an utterance from the actual Echo reaches the endpoint. Tear the tunnel
-down afterwards.
+### Alexa+ MCP first
 
-Exit criteria:
+Rejected. Access is partner-gated, the latency budget is stricter than ASK, and Amazon policy rejects a generic third-party LLM relay. It is not a substitute for making the current ASK skill work.
 
-- A real device invocation produces a request in the local log.
-- The invocation phrasing that works is written down.
+### One universal protocol handler
 
-Everything downstream assumes this works. It is ten minutes to find out.
+Rejected. ASK and MCP have different authentication, deadlines, conversation ownership, and response models. They should share application use cases, not protocol middleware.
 
-Status: not started.
+### Longer ASK timeout
 
-### Phase 1: Make It Usable
-
-The purpose of the project is slow, expensive answers. The current design treats
-that as an error case.
-
-Exit criteria:
-
-- A voice deadline shorter than Alexa's 8 seconds returns an acknowledgement
-  rather than a failure.
-- The provider call continues in the background under its own deadline and
-  writes its result to SQLite.
-- `last response` retrieves that result.
-- Token budget and reasoning/thinking effort are configurable per provider, and
-  an empty-text response is reported as its own diagnosable error rather than a
-  generic one.
-- Sample utterances read naturally; slot elicitation accepts free-form questions
-  in the two-turn flow. See `invocation-design.md`.
-- `docker compose up --build` starts and persists to the mounted volume.
-
-Status: not started.
-
-### Phase 2: Make It Safe To Expose
-
-Exit criteria:
-
-- `/alexa` validates Alexa signatures, certificate URL, certificate chain,
-  timestamp freshness, and allowed skill ID, and rejects with HTTP 400.
-- `ALEXA_VERIFY_REQUESTS=true` works with the Alexa Developer Console.
-- Request verification has unit tests using captured or fixture requests,
-  including wrong host, expired certificate, stale timestamp, and tampered body.
-- The public listener serves only `/alexa`. The dashboard, history, and health
-  endpoints are on a separate loopback-bound listener.
-- `/alexa` has rate limiting by IP and Alexa user ID, plus a global daily cap.
-
-Status: not started.
-
-### Phase 3: Make It Honest About Multiple Users
-
-Exit criteria:
-
-- History is scoped per Alexa user ID everywhere, not just in `last response`.
-- Retention is configurable by age and count.
-- Stored errors remain redacted.
-- The OpenAI provider has tests covering `output_text`, the nested
-  `output[].content[]` fallback, refusals, API errors, and empty output.
-- Security documentation describes a multi-user threat model.
-
-Status: not started.
-
-### Deferred
-
-Account linking, privacy policy, certification preparation, and per-user quotas.
-All are gated on the distribution decision above.
-
-## Dropped
-
-**OpenCode provider.** OpenCode was an implementation reference for calling an
-agent API, not a product requirement. As a provider it is a slower, more
-expensive route to the same chat completion the hosted providers already give,
-and an agent that runs for minutes cannot fit a voice turn. Removed from the
-provider layer, the configuration surface, and the documentation.
+Rejected. The external deadline is controlled by Alexa. Slow work needs deferred execution, not a larger local timeout.
