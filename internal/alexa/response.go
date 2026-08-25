@@ -21,8 +21,8 @@ type ResponseEnvelope struct {
 
 // SkillResponse is what Alexa should say and whether to keep listening.
 type SkillResponse struct {
-	OutputSpeech *OutputSpeech    `json:"outputSpeech,omitempty"`
-	Reprompt     *Reprompt        `json:"reprompt,omitempty"`
+	OutputSpeech *OutputSpeech     `json:"outputSpeech,omitempty"`
+	Reprompt     *Reprompt         `json:"reprompt,omitempty"`
 	Directives   []DialogDirective `json:"directives,omitempty"`
 
 	// ShouldEndSession false keeps the microphone open for a reply. It is

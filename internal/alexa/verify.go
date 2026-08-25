@@ -51,6 +51,10 @@ var (
 	// ErrInvalidTimestamp means the signed request timestamp was missing,
 	// malformed, or outside Amazon's maximum 150-second tolerance.
 	ErrInvalidTimestamp = errors.New("invalid Alexa request timestamp")
+
+	// ErrMissingAllowedSkillID means verified mode has no skill allowlist. A
+	// valid Amazon signature authenticates Alexa, not this particular skill.
+	ErrMissingAllowedSkillID = errors.New("allowed Alexa skill ID is required")
 )
 
 // VerificationConfig controls how incoming requests are authenticated.
@@ -117,7 +121,11 @@ func (v *RequestVerifier) Verify(r *http.Request, body []byte, envelope *Request
 		return errors.New("alexa request envelope is nil")
 	}
 
-	if allowed := strings.TrimSpace(v.cfg.AllowedSkillID); allowed != "" {
+	allowed := strings.TrimSpace(v.cfg.AllowedSkillID)
+	if v.cfg.VerifyRequests && allowed == "" {
+		return ErrMissingAllowedSkillID
+	}
+	if allowed != "" {
 		if got := envelope.ApplicationID(); got != allowed {
 			return errors.New("alexa skill ID is not allowed")
 		}
@@ -236,7 +244,10 @@ func (v *RequestVerifier) fetchCertificateChain(ctx context.Context, certificate
 	if err != nil {
 		return nil, fmt.Errorf("%w: build request", ErrCertificateFetch)
 	}
-	response, err := client.Do(request)
+	// certificateURL has passed the strict Amazon host, port, and path checks
+	// above. The production client's redirect hook applies the same checks to
+	// every hop; an injected client is trusted test-only configuration.
+	response, err := client.Do(request) //nolint:gosec // G704: URL and production redirects are allowlisted before network access.
 	if err != nil {
 		return nil, fmt.Errorf("%w: request failed", ErrCertificateFetch)
 	}

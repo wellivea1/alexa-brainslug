@@ -98,7 +98,7 @@ ALEXA_ALLOWED_SKILL_ID=amzn1.ask.skill.example
 
 This prevents another Alexa developer from configuring a different skill to call the same endpoint. It is required in addition to request-signature verification.
 
-A blank allowed skill ID should be treated as incomplete operator configuration for real use.
+When request verification is enabled, a blank allowed skill ID is rejected at startup and by the verifier itself. Verification-disabled local fixtures may omit it because they are never exposed publicly.
 
 ## Public And Administrative Listeners
 

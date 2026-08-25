@@ -66,10 +66,10 @@ func TestProviderPrincipalKeySeparatesNamespaces(t *testing.T) {
 
 func TestAppProviderMapsErrors(t *testing.T) {
 	tests := []struct {
-		name      string
-		err       error
-		want      error
-		alsoWant  error
+		name     string
+		err      error
+		want     error
+		alsoWant error
 	}{
 		{"not configured", ErrNotConfigured, app.ErrProviderNotConfigured, nil},
 		{"output limit", ErrOutputLimit, app.ErrProviderOutputLimit, app.ErrProviderNoText},

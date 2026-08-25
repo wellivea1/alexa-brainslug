@@ -58,6 +58,24 @@ func TestRequestVerifierAcceptsValidRequestAndCachesCertificate(t *testing.T) {
 	}
 }
 
+func TestHandlerAcceptsValidSignedLaunchRequest(t *testing.T) {
+	fixture := newSigningFixture(t, alexaSigningDNSName, time.Time{}, time.Time{})
+	body, _ := fixture.requestBody(t, fixture.now)
+	handler := NewHandler(Options{Verification: fixture.config(certificateClient(fixture.chainPEM, http.StatusOK, nil))}, &fakeApplication{})
+	request := signedRequest(t, body, fixture.sign(t, body), testCertificateURL)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP() status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	response := decodeResponse(t, recorder)
+	if len(response.Response.Directives) != 1 || response.Response.Directives[0].Type != directiveDialogDelegate {
+		t.Fatalf("ServeHTTP() directives = %#v", response.Response.Directives)
+	}
+}
+
 func TestRequestVerifierRejectsInvalidRequests(t *testing.T) {
 	fixture := newSigningFixture(t, alexaSigningDNSName, time.Time{}, time.Time{})
 
@@ -100,6 +118,21 @@ func TestRequestVerifierRejectsInvalidRequests(t *testing.T) {
 		err := verifier.Verify(signedRequest(t, body, fixture.sign(t, body), testCertificateURL), body, envelope)
 		if err == nil {
 			t.Fatal("Verify() accepted a foreign skill ID")
+		}
+		if got := requests.Load(); got != 0 {
+			t.Errorf("certificate requests = %d, want 0", got)
+		}
+	})
+
+	t.Run("missing allowed skill ID", func(t *testing.T) {
+		body, envelope := fixture.requestBody(t, fixture.now)
+		var requests atomic.Int32
+		config := fixture.config(certificateClient(fixture.chainPEM, http.StatusOK, &requests))
+		config.AllowedSkillID = ""
+		verifier := NewRequestVerifier(config)
+		err := verifier.Verify(signedRequest(t, body, fixture.sign(t, body), testCertificateURL), body, envelope)
+		if !errors.Is(err, ErrMissingAllowedSkillID) {
+			t.Errorf("Verify() error = %v", err)
 		}
 		if got := requests.Load(); got != 0 {
 			t.Errorf("certificate requests = %d, want 0", got)

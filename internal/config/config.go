@@ -28,12 +28,12 @@ const (
 // Defaults applied when a variable is unset. A variable that is set but
 // unparseable is an error, never a silent fall back to these.
 const (
-	defaultServerAddr              = "127.0.0.1:8080"
-	defaultSQLitePath              = "./brainslug.db"
-	defaultOpenAIMaxOutputTokens   = 25000
+	defaultServerAddr               = "127.0.0.1:8080"
+	defaultSQLitePath               = "./brainslug.db"
+	defaultOpenAIMaxOutputTokens    = 25000
 	defaultAnthropicMaxOutputTokens = 4096
-	defaultTimeoutSeconds          = 6
-	defaultLogLevel                = "info"
+	defaultTimeoutSeconds           = 6
+	defaultLogLevel                 = "info"
 
 	// minOutputTokens is the floor below which a response cannot hold a
 	// usable sentence.
@@ -225,6 +225,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.SQLitePath) == "" {
 		return errors.New("SQLITE_PATH must not be empty")
+	}
+	if c.AlexaVerifyRequests && strings.TrimSpace(c.AlexaAllowedSkillID) == "" {
+		return errors.New("ALEXA_ALLOWED_SKILL_ID must be set when ALEXA_VERIFY_REQUESTS=true")
 	}
 
 	switch c.Provider {

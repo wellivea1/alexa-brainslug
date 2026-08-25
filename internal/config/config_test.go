@@ -108,6 +108,7 @@ func TestLoadReadsOpenAIAPIKeyFile(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY_FILE", path)
 	t.Setenv("OPENAI_MODEL", "gpt-test")
 	t.Setenv("AI_PROVIDER", "openai")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
 
 	cfg, err := Load()
 	if err != nil {
@@ -127,6 +128,7 @@ func TestLoadAnthropicProvider(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY_FILE", path)
 	t.Setenv("ANTHROPIC_MODEL", "claude-test")
 	t.Setenv("ANTHROPIC_MAX_OUTPUT_TOKENS", "128")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
 
 	cfg, err := Load()
 	if err != nil {
@@ -143,5 +145,25 @@ func TestLoadAnthropicProvider(t *testing.T) {
 	}
 	if cfg.SelectedMaxOutputTokens() != 128 {
 		t.Fatalf("SelectedMaxOutputTokens = %d", cfg.SelectedMaxOutputTokens())
+	}
+}
+
+func TestValidateRequiresAllowedSkillIDInVerifiedMode(t *testing.T) {
+	cfg := Config{
+		ServerAddr:          "127.0.0.1:8080",
+		Provider:            ProviderOpenAI,
+		SQLitePath:          "test.db",
+		OpenAI:              OpenAIConfig{Model: "gpt-test", MaxOutputTokens: 128, Timeout: time.Second},
+		AlexaVerifyRequests: true,
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() accepted verified mode without ALEXA_ALLOWED_SKILL_ID")
+	}
+
+	cfg.AlexaVerifyRequests = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected controlled verification-disabled mode: %v", err)
 	}
 }

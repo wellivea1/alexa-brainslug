@@ -98,7 +98,8 @@ Implementation:
 - [x] Certificate URL requires HTTPS.
 - [x] Certificate host is restricted to Amazon's signing host.
 - [x] Port and path constraints are enforced.
-- [x] Credentials, fragments, dot segments, and duplicate slashes are rejected.
+- [x] Credentials and invalid ports are rejected.
+- [x] Fragments, dot segments, and duplicate slashes are canonicalized before validation.
 - [x] Redirects are revalidated.
 - [x] Certificate fetch has a timeout and size cap.
 - [x] PEM chain is parsed.
