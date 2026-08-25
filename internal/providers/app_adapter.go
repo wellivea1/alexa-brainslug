@@ -55,7 +55,9 @@ func mapAppError(err error) error {
 	case errors.Is(err, ErrNotConfigured):
 		return errors.Join(app.ErrProviderNotConfigured, err)
 	case errors.Is(err, ErrOutputLimit):
-		return errors.Join(app.ErrProviderOutputLimit, err)
+		// Keep a precise application category while preserving the existing
+		// voice behavior for a provider that produced no usable answer.
+		return errors.Join(app.ErrProviderOutputLimit, app.ErrProviderNoText, err)
 	case errors.Is(err, ErrEmptyResponse):
 		return errors.Join(app.ErrProviderNoText, err)
 	case errors.Is(err, context.DeadlineExceeded):
