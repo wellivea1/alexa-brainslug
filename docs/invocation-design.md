@@ -1,42 +1,60 @@
 # Invocation Design
 
-Options for how a user activates Alexa Brainslug and asks it a question. The
-goal is more than one natural-sounding route, not a single canonical phrase.
+## Decision
 
-Nothing here is committed. Every sample utterance has to survive a model build
-in the Alexa Developer Console, which rejects some combinations that look fine
-on paper.
+Use a classic ASK custom skill with explicit invocation.
 
-## How Alexa Composes an Utterance
-
-This is the part that causes most of the awkwardness, so it is worth stating
-plainly. What the user says is two pieces glued together:
+Recommended baseline:
 
 ```text
-[invocation phrase]        +  [sample utterance from interaction-model.json]
-"ask brain slug"              "about the halting problem"
+Alexa, open Brain Slug
+Brainslug is ready. What should I ask?
+<free-form question>
 ```
 
-Alexa supplies the invocation phrase. Supported forms include:
+Recommended one-shot forms after the interaction-model rewrite:
 
-- `ask {name} {utterance}`
-- `ask {name} about {utterance}`
-- `tell {name} to {utterance}`
-- `search {name} for {utterance}`
-- `open {name} and {utterance}`
-- `{utterance} from {name}`
+```text
+Alexa, ask Brain Slug about the halting problem
+Alexa, ask Brain Slug why my sourdough is dense
+Alexa, ask Brain Slug how quantum tunneling works
+Alexa, tell Brain Slug to explain the Monty Hall problem
+```
 
-Connecting words that Alexa recognises between the name and the utterance
-include `to`, `about`, `for`, `if`, `whether`, `using`, `with`, `from`, `by`,
-and `in`. The invocation name can appear at the start, middle, or end.
+Do not depend on name-free interaction or Alexa+ Natural Discovery for generic questions. Alexa+ normally has its own answer path and is not required to route an unnamed question to this private custom skill.
 
-The interaction model only controls the second half. So a sample utterance
-should read as the **tail** of a sentence that already begins "ask brain
-slug...", not as a standalone command.
+## Adapter Boundary
 
-## What Is Wrong Today
+Invocation handling belongs to the ASK adapter.
 
-`skill/interaction-model.json` currently uses:
+The adapter owns:
+
+- Invocation name and interaction model.
+- Intent and slot mapping.
+- Dialog directives and reprompts.
+- Alexa-specific speech for completed, pending, failed, help, and stop states.
+
+The application service owns:
+
+- Submitting the question.
+- Deciding whether the result completed or remains pending.
+- Provider execution and job lifecycle.
+- Saving and retrieving the caller's answer.
+
+The Alexa handler should not invoke a provider directly after the application-core extraction.
+
+## How Alexa Composes One-Shot Utterances
+
+Alexa joins an invocation phrase to a sample utterance:
+
+```text
+[invocation phrase]        + [sample utterance]
+"ask brain slug"             "about the halting problem"
+```
+
+The sample must read as the tail of a sentence that already begins with `ask Brain Slug`, `tell Brain Slug`, `open Brain Slug and`, or another supported invocation form.
+
+The current interaction model uses samples such as:
 
 ```text
 ask {Query}
@@ -45,32 +63,30 @@ question {Query}
 ask chat g p t {Query}
 ```
 
-Glued to the invocation phrase, these produce:
+These produce poor phrases:
 
-- "Alexa, ask brain slug **ask** what is SQLite" - says "ask" twice
-- "Alexa, ask brain slug **send** what is SQLite" - not English
-- "Alexa, ask brain slug **question** what is SQLite" - not English
+```text
+Alexa, ask Brain Slug ask what is SQLite
+Alexa, ask Brain Slug send what is SQLite
+```
 
-The samples were written as if they were the whole sentence. They are not.
+The third-party product name also should not appear in a certification-bound interaction model.
 
-Separately, `ask chat g p t {Query}` names a third-party product. That is a
-trademark reference and should be removed before any certification attempt.
+## AMAZON.SearchQuery Constraint
 
-## Why a Carrier Phrase Is Required
+`Query` uses `AMAZON.SearchQuery`. It is the appropriate built-in slot for flexible question text, but Amazon requires a carrier phrase around the slot in intent samples.
 
-`Query` is an `AMAZON.SearchQuery` slot. That slot type is greedy - it will
-swallow anything - so Amazon requires every sample utterance to contain at
-least one non-slot word anchoring it. A sample of just `{Query}` is rejected
-with "Sample utterances for this intent should include a carrier phrase around
-the AMAZON.SearchQuery slot."
+A sample containing only:
 
-The carrier phrase is therefore not optional. The design problem is choosing
-carriers that read naturally *after* "ask brain slug".
+```text
+{Query}
+```
 
-## Option 1: Rewrite the Sample Utterances
+is rejected by the model builder.
 
-Lowest effort, biggest improvement. Replace the current four with a set whose
-carriers double as natural connecting words:
+Use a small set of natural carrier phrases rather than a large brittle utterance list.
+
+Recommended one-shot samples:
 
 ```text
 about {Query}
@@ -84,126 +100,170 @@ for {Query}
 the answer to {Query}
 ```
 
-Which yields:
+These should be tested in the Alexa Developer Console before replacing the shipped model. Amazon may reject or resolve some combinations differently from what looks valid on paper.
 
-- "Alexa, ask brain slug **about** the halting problem"
-- "Alexa, ask brain slug **what is** a merkle tree"
-- "Alexa, ask brain slug **why** my sourdough is dense"
-- "Alexa, ask brain slug **how** photosynthesis works"
-- "Alexa, ask brain slug **whether** this is a real word"
-- "Alexa, tell brain slug **to explain** quantum tunneling"
-- "Alexa, open brain slug and **explain** the Monty Hall problem"
-- "Alexa, search brain slug **for** the capital of Burkina Faso"
+## Two-Turn Flow
 
-Trade-off: question-word carriers cover most natural phrasings but not bare
-noun phrases. "Alexa, ask brain slug the halting problem" will not match and
-falls through to `AMAZON.FallbackIntent`. `the answer to {Query}` and
-`about {Query}` cover a lot of that gap.
+The two-turn flow is the primary flexible path because slot elicitation can capture the user's whole follow-up utterance without requiring the user to say a carrier phrase.
 
-## Option 2: Two-Turn Session With Slot Elicitation
-
-The carrier-phrase rule applies to *intent* samples. During dialog slot
-elicitation the user's entire next utterance fills the slot with no carrier
-needed. That makes the two-turn flow strictly more permissive than the
-one-shot flow:
+Target behavior:
 
 ```text
-User:  "Alexa, open brain slug"
-Alexa: "Brainslug is ready. What should I ask?"
-User:  "the halting problem"          <- anything at all matches here
+User:  Alexa, open Brain Slug
+Alexa: Brainslug is ready. What should I ask?
+User:  Explain why disappearing polymorphs are difficult to reproduce.
 ```
 
-This requires adding dialog management to `AskGPTIntent` (mark `Query`
-required, let Alexa elicit it) and handling `Dialog.Delegate` /
-`Dialog.ElicitSlot` directives in `internal/alexa/response.go`, which does not
-model directives yet.
+Implementation requirements:
 
-Worth doing regardless of Option 1 - it is the only route that accepts
-arbitrary phrasing, and it pairs naturally with keeping the session open for
-follow-up questions.
+- Mark `Query` as required in the dialog model.
+- Delegate or explicitly elicit the slot when it is missing.
+- Model ASK directives in the response types.
+- Preserve stop, cancel, help, fallback, and session-ended behavior.
+- Normalize whitespace but do not rewrite the user's question in the adapter.
 
-## Option 3: User-Created Routines (Arbitrary Short Phrases)
+The two-turn flow should be the documented fallback whenever a one-shot phrase is not recognized.
 
-The only way to get a completely custom trigger phrase. In the Alexa app the
-user creates a routine: *When you say "**think hard**" -> Alexa says/does ->
-Custom -> "open brain slug"*.
+## Completed And Deferred Responses
 
-This escapes every invocation-name rule. Candidate phrases: "think hard",
-"big brain time", "deep question", "second opinion", "phone a friend".
+A provider result may or may not fit inside the ASK request deadline.
 
-Trade-offs: per-user manual setup, cannot pass a question through in one shot
-(it can only launch the skill, so it must be combined with Option 2), and
-routine triggers are account-wide. Note that Alexa Routines **Kit** - the
-developer API for provisioning routines - was retired on 2026-05-13, so this
-cannot be shipped pre-configured; it is a documented setup step for the user.
+### Completed in the same turn
 
-## Option 4: Name-Free Interaction (`CanFulfillIntentRequest`)
+```text
+User:  Alexa, ask Brain Slug about SQLite write-ahead logging.
+Alexa: <concise answer>
+```
 
-Lets Alexa route an un-named request ("Alexa, what is a merkle tree") to the
-skill when it declares it can fulfil the intent. Requires implementing the
-`CanFulfillIntentRequest` interface.
+The ASK adapter receives a completed application result and speaks the voice-safe answer.
 
-Realistically low value here: Alexa+ answers general questions itself, so it
-will not hand a generic question to a third-party skill. Listed for
-completeness; not recommended.
+### Accepted for deferred completion
 
-## Alternative Invocation Names
+```text
+User:  Alexa, ask Brain Slug to compare three explanations of the Fermi paradox.
+Alexa: I am working on that. Ask Brain Slug for the last response in a moment.
+```
 
-Amazon's rules, verbatim where they matter:
+The exact wording may change after device testing, but it must:
 
-- Two or more words, unless the name is a brand you can prove you own
-- Lower-case alphabetic characters only
-- No `alexa`, `amazon`, `echo`, `skill`, `app`
-- No launch verbs: `ask`, `open`, `tell`, `start`, `play`, `run`, `use`,
-  `launch`, `begin`, `enable`
-- Two-word names may not use articles (`the`, `a`, `an`) or prepositions
-  (`for`, `to`, `of`, `about`, `with`, `by`, `at`, `in`)
-- No connecting words: `and`, `or`, `if`, `whether`, `that`, `using`
-- Numbers spelled out; hyphens generally not allowed
-- Must be distinctive - overly generic names get rejected at certification
+- Confirm that the request was accepted.
+- Avoid promising a completion time.
+- Tell the user how to retrieve the result.
+- End before Alexa's request deadline.
 
-Candidates that satisfy all of the above:
+The provider job continues under an application-owned deadline independent of the Alexa HTTP request.
 
-| Name | Reads as | Notes |
-| --- | --- | --- |
-| `brain slug` | "ask brain slug about..." | Current. Distinctive, two clear syllables, good ASR. |
-| `deep thought` | "ask deep thought about..." | Reads the most naturally of any option. Possible IP concern (Hitchhiker's Guide) at certification. |
-| `second opinion` | "ask second opinion about..." | Matches the actual purpose exactly. Slightly stilted without an article. |
-| `brain trust` | "ask brain trust about..." | Natural, distinctive. |
-| `big brain` | "ask big brain about..." | Casual; very easy to say. |
-| `think tank` | "ask think tank about..." | Natural but generic - certification risk. |
+### Pending retrieval
 
-`the oracle` and similar are disallowed (leading article in a two-word name).
+```text
+User:  Alexa, ask Brain Slug for the last response.
+Alexa: I am still working on it.
+```
 
-Because a routine (Option 3) can front any of these with a phrase the user
-prefers, the invocation name matters less than it looks. Recommendation: keep
-`brain slug` - it is distinctive, ASR-friendly, and already in the repo.
+### Completed retrieval
 
-## Recommended Combination
+```text
+User:  Alexa, ask Brain Slug for the last response.
+Alexa: <concise saved answer>
+```
 
-1. Rewrite the sample utterances (Option 1) - cheap, fixes the worst of it.
-2. Add slot elicitation and keep the session open (Option 2) - makes the
-   two-turn flow accept anything, and is required for the deferred-answer flow
-   to feel conversational.
-3. Document the routine trick (Option 3) in the README as an optional setup
-   step for a short custom phrase.
+### Failed retrieval
 
-Skip Option 4.
+```text
+User:  Alexa, ask Brain Slug for the last response.
+Alexa: I could not finish that request. Try asking again.
+```
 
-## Certification Notes
+The adapter may distinguish operator misconfiguration, provider congestion, and an exhausted output budget when that distinction gives the listener a useful next step. It must not speak provider diagnostics or credentials.
 
-Relevant only if the skill is published to the store:
+## Last Response Semantics
 
-- Remove `ask chat g p t {Query}` - third-party trademark.
-- A skill that forwards arbitrary user speech to a third-party AI API needs a
-  privacy policy URL, and should disclose the AI use in the description.
-- Invocation name must not be generic; `brain slug` is fine, `think tank` is
-  borderline.
+`LastResponseIntent` should mean the latest job owned by the authenticated principal, not the latest row in the database globally.
 
-## Open Decisions
+Recommended rules:
 
-- Keep `brain slug`, or switch to `deep thought` / `second opinion`?
-- Should the session stay open after an answer for follow-up questions, or end
-  each turn (current behaviour is end-of-turn via `NewTell`)?
-- Should `LastResponseIntent` keep its own utterances, or fold into a single
-  "what did you find" phrasing once deferred answers exist?
+1. If the latest job is running, report pending.
+2. If it completed, speak the short answer.
+3. If it failed, speak a stable user-safe failure message.
+4. If there is no job, say no previous response exists.
+5. Repeat may replay the last spoken answer, but it should not accidentally select a different user's record.
+
+After deferred jobs exist, consider separate phrases for status and completed history only if real-device testing shows the single `last response` concept is confusing.
+
+## Follow-Up Questions
+
+Do not add general follow-up conversation in the same change as slot elicitation and deferred jobs.
+
+A follow-up feature needs explicit answers to:
+
+- Which prior turns are sent to the provider.
+- How long a conversation remains active.
+- Whether a deferred answer belongs to the same conversation.
+- How history is scoped and deleted.
+- How token growth is bounded.
+
+The existing provider request type has room for prior context, but that is not a complete conversation design. Keep the first usable version one question per job.
+
+## Optional User Routine
+
+A user-created Alexa Routine may provide a shorter personal launch phrase, for example:
+
+```text
+When I say: think hard
+Custom action: open Brain Slug
+```
+
+This only launches the skill. The user still supplies the question in the second turn.
+
+Do not build product logic around provisioning routines. Alexa Routines Kit was retired, so this remains an optional manual convenience for the owner.
+
+## Invocation Name
+
+Keep `brain slug` unless real-device recognition is poor.
+
+Reasons:
+
+- Distinctive.
+- Two words.
+- Easy to hear and say.
+- Already represented in the repository.
+- Reads naturally with `about`, `why`, `how`, and `to explain` carriers.
+
+Do not switch names merely to avoid a two-turn flow. The interaction-model constraints remain.
+
+## Name-Free Interaction
+
+`CanFulfillIntentRequest` and ASK name-free interaction are not the same as Alexa+ Natural Discovery. Neither should be a dependency for Brainslug's core use case.
+
+Reasons to skip it initially:
+
+- Generic questions compete with Alexa's own answer path.
+- Routing is not guaranteed.
+- Availability and eligibility vary.
+- Explicit invocation is easier to test and explain.
+
+The application architecture should not know whether an adapter was reached by explicit invocation or another platform routing mechanism.
+
+## Interaction Model Acceptance Tests
+
+Before calling the invocation rewrite complete:
+
+- The model builds without warnings or unsupported utterances.
+- `Alexa, open Brain Slug` elicits a missing query.
+- The full follow-up utterance fills `Query`.
+- At least the recommended `about`, `why`, `how`, and `to explain` one-shot forms work on a real Echo.
+- Stop and cancel end the session.
+- Help explains both one-shot and two-turn use briefly.
+- Fallback returns to question elicitation rather than ending unnecessarily.
+- A pending application result produces the deferred acknowledgement.
+- `last response` distinguishes no history, pending, completed, and failed states.
+- No sample utterance contains a third-party model or product trademark.
+
+## Open Decisions For Device Testing
+
+- Exact pending acknowledgement wording.
+- Whether a completed answer should keep the session open for one follow-up.
+- Whether `last response` and `status` need separate intents.
+- Whether `repeat` should replay only the current session response or the latest stored answer.
+
+These decisions should be made from real Echo behavior after the basic two-turn flow works, not from interaction-model speculation alone.
