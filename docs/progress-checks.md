@@ -136,11 +136,12 @@ Real environment:
 - [x] Administrative mux registers `/health`, `/history`, and `/`.
 - [x] `ADMIN_SERVER_ADDR` defaults to loopback.
 - [x] Configuration rejects identical listener addresses.
-- [x] Configuration rejects a wildcard administrative bind.
+- [x] Docker explicitly uses an in-container wildcard admin bind and maps it only to host loopback.
 - [x] Docker maps both listeners to host loopback.
 - [x] Container health check uses port 8081.
 - [x] Caddy example proxies only `/alexa` to port 8080.
 - [x] Route-isolation tests confirm public admin paths return 404.
+- [ ] Any explicit non-loopback `ADMIN_SERVER_ADDR` override has been reviewed for the deployment topology.
 - [ ] Public hostname is probed from outside the LAN.
 - [ ] Port 8081 is confirmed unreachable from the public internet.
 
