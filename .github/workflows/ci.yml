@@ -101,28 +101,32 @@ jobs:
         run: docker build --tag alexa-brainslug:ci .
 
       # A container that cannot start is a deployment that cannot start. This
-      # catches the class of bug where the image and the compose environment
-      # disagree about where the database lives.
-      - name: Verify the container starts and serves health
+      # catches listener and volume disagreements between the image and
+      # Compose configuration.
+      - name: Verify the container starts and serves private health
         run: |
           docker run --detach --name brainslug-ci \
             --env OPENAI_API_KEY=ci-placeholder-key \
             --env OPENAI_MODEL=gpt-5-mini \
-            --publish 8080:8080 \
+            --publish 127.0.0.1:18080:8080 \
+            --publish 127.0.0.1:18081:8081 \
             alexa-brainslug:ci
 
           for _ in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8080/health; then
+            if curl --fail --silent http://127.0.0.1:18081/health; then
               echo
-              echo "health endpoint responded"
-              exit 0
+              echo "private health endpoint responded"
+              break
             fi
             sleep 1
           done
 
-          echo "::error::The container did not become healthy."
-          docker logs brainslug-ci
-          exit 1
+          curl --fail --silent http://127.0.0.1:18081/health >/dev/null
+
+          # The public ASK listener must not expose administration even when
+          # Docker publishes the whole listener port.
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/health)" = "404"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/history)" = "404"
 
       - name: Container logs
         if: always()
