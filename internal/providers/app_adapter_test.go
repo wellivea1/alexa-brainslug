@@ -42,7 +42,7 @@ func TestAppProviderMapsRequestAndResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ask() error = %v", err)
 	}
-	if underlying.request.UserID != "user-1" || underlying.request.Prompt != "question" {
+	if underlying.request.UserID != "alexa:user-1" || underlying.request.Prompt != "question" {
 		t.Errorf("underlying request = %+v", underlying.request)
 	}
 	if underlying.request.Model != "requested-model" || underlying.request.MaxOutputTokens != 512 {
@@ -53,6 +53,14 @@ func TestAppProviderMapsRequestAndResponse(t *testing.T) {
 	}
 	if response.ShortAnswer != "short" || response.FullAnswer != "full" {
 		t.Errorf("response = %+v", response)
+	}
+}
+
+func TestProviderPrincipalKeySeparatesNamespaces(t *testing.T) {
+	alexa := providerPrincipalKey(app.Principal{Namespace: "alexa", Subject: "user-1"})
+	mcp := providerPrincipalKey(app.Principal{Namespace: "mcp", Subject: "user-1"})
+	if alexa == mcp {
+		t.Fatalf("provider principal keys collide: %q", alexa)
 	}
 }
 
