@@ -185,7 +185,7 @@ func speechForApplicationError(err error) string {
 		return speechUnknownUser
 	case errors.Is(err, app.ErrProviderNotConfigured):
 		return speechProviderMisconfig
-	case errors.Is(err, app.ErrProviderNoText):
+	case errors.Is(err, app.ErrProviderNoText), errors.Is(err, app.ErrProviderOutputLimit):
 		return speechProviderNoText
 	case errors.Is(err, app.ErrProviderUnavailable), errors.Is(err, context.DeadlineExceeded):
 		return speechProviderBusy
