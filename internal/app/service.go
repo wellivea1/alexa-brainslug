@@ -103,7 +103,10 @@ type ProviderResponse struct {
 
 // Provider is the outbound model capability the application requires.
 type Provider interface {
+	// Name reports the stable provider identifier stored with results.
 	Name() string
+
+	// Ask executes one provider request and respects the context deadline.
 	Ask(ctx context.Context, req ProviderRequest) (ProviderResponse, error)
 }
 
@@ -125,16 +128,26 @@ type Interaction struct {
 
 // Repository is the persistence capability the application requires.
 type Repository interface {
+	// SaveInteraction persists one completed or failed interaction.
 	SaveInteraction(ctx context.Context, interaction Interaction) (int64, error)
+
+	// GetLatestResponse returns the newest successful response for a principal.
 	GetLatestResponse(ctx context.Context, principal Principal) (*Interaction, error)
 }
 
 // Options configures application policy rather than an inbound protocol.
 type Options struct {
-	Model           string
+	// Model is the explicit model requested for every question.
+	Model string
+
+	// MaxOutputTokens is the provider output budget.
 	MaxOutputTokens int
-	SaveHistory     bool
-	Secrets         []string
+
+	// SaveHistory controls whether outcomes are persisted.
+	SaveHistory bool
+
+	// Secrets are removed from diagnostics before persistence.
+	Secrets []string
 }
 
 // Service implements Brainslug's synchronous question and history use cases.
