@@ -25,25 +25,24 @@ import (
 )
 
 // Server timeouts.
-//
-// ReadHeaderTimeout bounds how long a client may dawdle over headers, which
-// is the slowloris defence. WriteTimeout has to exceed the provider timeout
-// or the gateway would cut off its own in-flight answers, so it is derived
-// from the configured provider timeout rather than fixed.
 const (
 	readHeaderTimeout = 5 * time.Second
 	readTimeout       = 15 * time.Second
 	idleTimeout       = 60 * time.Second
 	writeTimeoutSlack = 10 * time.Second
+	adminWriteTimeout = 15 * time.Second
 
-	// shutdownTimeout bounds how long in-flight requests get to finish after
-	// a signal. Alexa gives up at 8 seconds, so anything longer than that is
-	// only for the SQLite write that follows.
+	// shutdownTimeout bounds the combined drain of both listeners.
 	shutdownTimeout = 15 * time.Second
 
 	// maxRequestBodyBytes caps request bodies at the server boundary.
 	maxRequestBodyBytes int64 = 1 << 20
 )
+
+type namedServer struct {
+	name   string
+	server *http.Server
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -54,7 +53,6 @@ func main() {
 
 // run owns the process lifecycle and returns an error instead of exiting, so
 // that every deferred cleanup, including the database handle, actually runs.
-// os.Exit in the middle of startup skips defers; that was a real leak here.
 func run() error {
 	if err := config.LoadDotEnv(".env"); err != nil {
 		// Not fatal: the environment may already carry everything needed.
@@ -64,6 +62,10 @@ func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	adminAddr, err := config.LoadAdminServerAddr(cfg.ServerAddr)
+	if err != nil {
+		return fmt.Errorf("invalid listener configuration: %w", err)
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -89,54 +91,6 @@ func run() error {
 		return fmt.Errorf("configure provider: %w", err)
 	}
 
-	server := &http.Server{
-		Addr:              cfg.ServerAddr,
-		Handler:           buildHandler(cfg, provider, db),
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      cfg.SelectedTimeout() + writeTimeoutSlack,
-		IdleTimeout:       idleTimeout,
-	}
-
-	errs := make(chan error, 1)
-	go func() {
-		slog.Info("starting Alexa Brainslug",
-			"addr", cfg.ServerAddr,
-			"provider", cfg.Provider,
-			"model", cfg.SelectedModel(),
-			"verify_alexa", cfg.AlexaVerifyRequests,
-			"history", cfg.SaveHistory,
-		)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errs <- err
-		}
-	}()
-
-	select {
-	case err := <-errs:
-		return fmt.Errorf("server failed: %w", err)
-	case <-ctx.Done():
-		slog.Info("shutdown signal received, draining")
-	}
-
-	// A fresh context: the signal already cancelled the one above, and
-	// Shutdown needs a live deadline to drain against.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("graceful shutdown: %w", err)
-	}
-	slog.Info("stopped cleanly")
-	return nil
-}
-
-// buildHandler assembles the route table and the middleware chain.
-//
-// Middleware order matters: the body limit runs before anything reads a body,
-// and request logging wraps everything so that rejected requests are logged
-// too.
-func buildHandler(cfg config.Config, provider providers.Provider, db *store.Store) http.Handler {
 	application := app.NewService(app.Options{
 		Model:           cfg.SelectedModel(),
 		MaxOutputTokens: cfg.SelectedMaxOutputTokens(),
@@ -151,16 +105,96 @@ func buildHandler(cfg config.Config, provider providers.Provider, db *store.Stor
 		},
 	}, application)
 
+	servers := []namedServer{
+		{
+			name: "ask",
+			server: &http.Server{
+				Addr:              cfg.ServerAddr,
+				Handler:           buildPublicHandler(cfg.PublicBaseURL, alexaHandler),
+				ReadHeaderTimeout: readHeaderTimeout,
+				ReadTimeout:       readTimeout,
+				WriteTimeout:      cfg.SelectedTimeout() + writeTimeoutSlack,
+				IdleTimeout:       idleTimeout,
+			},
+		},
+		{
+			name: "admin",
+			server: &http.Server{
+				Addr:              adminAddr,
+				Handler:           buildAdminHandler(&cfg, provider.Name(), db),
+				ReadHeaderTimeout: readHeaderTimeout,
+				ReadTimeout:       readTimeout,
+				WriteTimeout:      adminWriteTimeout,
+				IdleTimeout:       idleTimeout,
+			},
+		},
+	}
+
+	errs := make(chan error, len(servers))
+	for _, server := range servers {
+		server := server
+		go serve(server, errs)
+	}
+
+	var serveErr error
+	select {
+	case serveErr = <-errs:
+		slog.Error("server failed, shutting down", "error", serveErr)
+	case <-ctx.Done():
+		slog.Info("shutdown signal received, draining")
+	}
+
+	// A fresh context: the signal may already have canceled the process
+	// context, and Shutdown needs a live deadline to drain against.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	var shutdownErrs []error
+	for _, server := range servers {
+		if err := server.server.Shutdown(shutdownCtx); err != nil {
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown %s server: %w", server.name, err))
+		}
+	}
+	if err := errors.Join(shutdownErrs...); err != nil {
+		return err
+	}
+	if serveErr != nil {
+		return serveErr
+	}
+
+	slog.Info("stopped cleanly")
+	return nil
+}
+
+func serve(server namedServer, errs chan<- error) {
+	slog.Info("starting Alexa Brainslug listener", "listener", server.name, "addr", server.server.Addr)
+	if err := server.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		errs <- fmt.Errorf("%s server: %w", server.name, err)
+	}
+}
+
+// buildPublicHandler registers only the authenticated ASK ingress surface.
+func buildPublicHandler(publicBaseURL string, alexaHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("POST /alexa", alexaHandler)
+
+	return security.RequestLogger(
+		security.Headers(publicBaseURL,
+			security.LimitRequestBody(maxRequestBodyBytes, mux)))
+}
+
+// buildAdminHandler registers local administrative routes on the separate
+// listener. The caller controls binding; the default is host loopback.
+func buildAdminHandler(cfg *config.Config, providerName string, db *store.Store) http.Handler {
 	dashboard := web.NewDashboard(db)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(&cfg, provider.Name()))
-	mux.Handle("POST /alexa", alexaHandler)
+	mux.HandleFunc("GET /health", healthHandler(cfg, providerName))
 	mux.HandleFunc("GET /history", dashboard.HandleHistory)
 	mux.HandleFunc("GET /{$}", dashboard.HandleIndex)
 
 	return security.RequestLogger(
-		security.Headers(cfg.PublicBaseURL,
+		security.Headers("",
 			security.LimitRequestBody(maxRequestBodyBytes, mux)))
 }
 
