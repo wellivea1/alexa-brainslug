@@ -2,12 +2,6 @@ package alexa
 
 import "strings"
 
-// unknownUserID is recorded when a request carries no user identifier.
-// Recording a placeholder keeps the row rather than dropping the interaction,
-// but it is not a real identity: the last response intent scopes by user ID,
-// so every anonymous request shares one bucket.
-const unknownUserID = "unknown"
-
 // RequestEnvelope is the JSON body Alexa posts to the skill endpoint.
 //
 // Only the fields this skill uses are modelled. Alexa sends considerably
@@ -73,18 +67,14 @@ type Slot struct {
 	Value string `json:"value,omitempty"`
 }
 
-// UserID returns the Alexa user identifier.
-//
-// Alexa places it on the session for in-session requests and on the system
-// context otherwise, so both are checked before falling back to a placeholder.
+// UserID returns the Alexa user identifier, or empty when neither location in
+// the request carries one. Callers must reject an empty ID rather than placing
+// unrelated requests into a shared anonymous history bucket.
 func (e *RequestEnvelope) UserID() string {
 	if id := strings.TrimSpace(e.Session.User.UserID); id != "" {
 		return id
 	}
-	if id := strings.TrimSpace(e.Context.System.User.UserID); id != "" {
-		return id
-	}
-	return unknownUserID
+	return strings.TrimSpace(e.Context.System.User.UserID)
 }
 
 // SessionID returns the session identifier, which may be empty.
