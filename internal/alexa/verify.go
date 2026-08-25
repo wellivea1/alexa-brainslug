@@ -86,7 +86,15 @@ type RequestVerifier struct {
 
 type cachedCertificate struct {
 	certificate *x509.Certificate
+	validFrom   time.Time
+	validUntil  time.Time
 	cachedAt    time.Time
+}
+
+type verifiedCertificate struct {
+	leaf       *x509.Certificate
+	validFrom  time.Time
+	validUntil time.Time
 }
 
 // NewRequestVerifier builds a verifier with an isolated bounded certificate
@@ -106,12 +114,12 @@ func VerifyRequest(r *http.Request, body []byte, envelope *RequestEnvelope, cfg 
 // expected skill application ID.
 func (v *RequestVerifier) Verify(r *http.Request, body []byte, envelope *RequestEnvelope) error {
 	if envelope == nil {
-		return errors.New("Alexa request envelope is nil")
+		return errors.New("alexa request envelope is nil")
 	}
 
 	if allowed := strings.TrimSpace(v.cfg.AllowedSkillID); allowed != "" {
 		if got := envelope.ApplicationID(); got != allowed {
-			return errors.New("Alexa skill ID is not allowed")
+			return errors.New("alexa skill ID is not allowed")
 		}
 	}
 
@@ -119,7 +127,7 @@ func (v *RequestVerifier) Verify(r *http.Request, body []byte, envelope *Request
 		return nil
 	}
 	if r == nil {
-		return errors.New("Alexa HTTP request is nil")
+		return errors.New("alexa HTTP request is nil")
 	}
 
 	certificateURL, err := normalizeCertificateURL(r.Header.Get(signatureCertChainURLHeader))
@@ -171,12 +179,12 @@ func (v *RequestVerifier) signingCertificate(ctx context.Context, certificateURL
 	if err != nil {
 		return nil, err
 	}
-	leaf, err := verifyCertificateChain(certificates, v.cfg.RootCAs, now)
+	verified, err := verifyCertificateChain(certificates, v.cfg.RootCAs, now)
 	if err != nil {
 		return nil, err
 	}
-	v.cacheCertificate(certificateURL, leaf, now)
-	return leaf, nil
+	v.cacheCertificate(certificateURL, verified, now)
+	return verified.leaf, nil
 }
 
 func (v *RequestVerifier) cached(certificateURL string, now time.Time) *x509.Certificate {
@@ -186,7 +194,7 @@ func (v *RequestVerifier) cached(certificateURL string, now time.Time) *x509.Cer
 	if !ok {
 		return nil
 	}
-	if now.Before(entry.certificate.NotBefore) || !now.Before(entry.certificate.NotAfter) {
+	if now.Before(entry.validFrom) || !now.Before(entry.validUntil) {
 		v.mu.Lock()
 		delete(v.cache, certificateURL)
 		v.mu.Unlock()
@@ -195,7 +203,7 @@ func (v *RequestVerifier) cached(certificateURL string, now time.Time) *x509.Cer
 	return entry.certificate
 }
 
-func (v *RequestVerifier) cacheCertificate(certificateURL string, certificate *x509.Certificate, now time.Time) {
+func (v *RequestVerifier) cacheCertificate(certificateURL string, certificate verifiedCertificate, now time.Time) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -210,7 +218,12 @@ func (v *RequestVerifier) cacheCertificate(certificateURL string, certificate *x
 		}
 		delete(v.cache, oldestURL)
 	}
-	v.cache[certificateURL] = cachedCertificate{certificate: certificate, cachedAt: now}
+	v.cache[certificateURL] = cachedCertificate{
+		certificate: certificate.leaf,
+		validFrom:   certificate.validFrom,
+		validUntil:  certificate.validUntil,
+		cachedAt:    now,
+	}
 }
 
 func (v *RequestVerifier) fetchCertificateChain(ctx context.Context, certificateURL string) ([]byte, error) {
@@ -219,8 +232,7 @@ func (v *RequestVerifier) fetchCertificateChain(ctx context.Context, certificate
 		client = newCertificateHTTPClient()
 	}
 
-	// certificateURL has passed strict scheme, host, port, and path validation.
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, certificateURL, http.NoBody) //nolint:gosec
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, certificateURL, http.NoBody) //nolint:gosec // certificateURL passed strict Amazon host and path validation.
 	if err != nil {
 		return nil, fmt.Errorf("%w: build request", ErrCertificateFetch)
 	}
@@ -235,6 +247,11 @@ func (v *RequestVerifier) fetchCertificateChain(ctx context.Context, certificate
 		_ = response.Body.Close()
 	}()
 
+	if response.Request != nil && response.Request.URL != nil {
+		if _, err := normalizeCertificateURL(response.Request.URL.String()); err != nil {
+			return nil, fmt.Errorf("%w: redirected outside the allowed certificate location", ErrCertificateFetch)
+		}
+	}
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: HTTP status %d", ErrCertificateFetch, response.StatusCode)
 	}
@@ -251,14 +268,14 @@ func (v *RequestVerifier) fetchCertificateChain(ctx context.Context, certificate
 
 func newCertificateHTTPClient() *http.Client {
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: certificateFetchTimeout, KeepAlive: 30 * time.Second}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          10,
-		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   certificateFetchTimeout,
-		ResponseHeaderTimeout: certificateFetchTimeout,
-		ExpectContinueTimeout: time.Second,
+		Proxy:                  http.ProxyFromEnvironment,
+		DialContext:            (&net.Dialer{Timeout: certificateFetchTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:      true,
+		MaxIdleConns:           10,
+		IdleConnTimeout:        30 * time.Second,
+		TLSHandshakeTimeout:    certificateFetchTimeout,
+		ResponseHeaderTimeout:  certificateFetchTimeout,
+		ExpectContinueTimeout:  time.Second,
 		MaxResponseHeaderBytes: 16 << 10,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
 	}
@@ -346,10 +363,10 @@ func parseCertificateChain(chainPEM []byte) ([]*x509.Certificate, error) {
 	return certificates, nil
 }
 
-func verifyCertificateChain(certificates []*x509.Certificate, roots *x509.CertPool, now time.Time) (*x509.Certificate, error) {
+func verifyCertificateChain(certificates []*x509.Certificate, roots *x509.CertPool, now time.Time) (verifiedCertificate, error) {
 	leaf := certificates[0]
 	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
-		return nil, fmt.Errorf("%w: signing certificate is outside its validity period", ErrInvalidCertificate)
+		return verifiedCertificate{}, fmt.Errorf("%w: signing certificate is outside its validity period", ErrInvalidCertificate)
 	}
 
 	hasRequiredSAN := false
@@ -360,33 +377,45 @@ func verifyCertificateChain(certificates []*x509.Certificate, roots *x509.CertPo
 		}
 	}
 	if !hasRequiredSAN {
-		return nil, fmt.Errorf("%w: required signing SAN is absent", ErrInvalidCertificate)
+		return verifiedCertificate{}, fmt.Errorf("%w: required signing SAN is absent", ErrInvalidCertificate)
 	}
 
 	if roots == nil {
 		var err error
 		roots, err = x509.SystemCertPool()
-		if err != nil {
-			return nil, fmt.Errorf("%w: load system roots", ErrInvalidCertificate)
+		if err != nil || roots == nil {
+			return verifiedCertificate{}, fmt.Errorf("%w: load system roots", ErrInvalidCertificate)
 		}
 	}
 	intermediates := x509.NewCertPool()
 	for _, certificate := range certificates[1:] {
 		intermediates.AddCert(certificate)
 	}
-	if _, err := leaf.Verify(x509.VerifyOptions{
+	chains, err := leaf.Verify(x509.VerifyOptions{
 		Roots:         roots,
 		Intermediates: intermediates,
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}); err != nil {
-		return nil, fmt.Errorf("%w: chain validation failed", ErrInvalidCertificate)
+	})
+	if err != nil || len(chains) == 0 {
+		return verifiedCertificate{}, fmt.Errorf("%w: chain validation failed", ErrInvalidCertificate)
 	}
-	return leaf, nil
+
+	validFrom := chains[0][0].NotBefore
+	validUntil := chains[0][0].NotAfter
+	for _, certificate := range chains[0][1:] {
+		if certificate.NotBefore.After(validFrom) {
+			validFrom = certificate.NotBefore
+		}
+		if certificate.NotAfter.Before(validUntil) {
+			validUntil = certificate.NotAfter
+		}
+	}
+	return verifiedCertificate{leaf: leaf, validFrom: validFrom, validUntil: validUntil}, nil
 }
 
 func verifyTimestamp(rawTimestamp string, now time.Time) error {
-	timestamp, err := time.Parse(time.RFC3339, strings.TrimSpace(rawTimestamp))
+	timestamp, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(rawTimestamp))
 	if err != nil {
 		return ErrInvalidTimestamp
 	}
