@@ -1,12 +1,19 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/wellivea1/alexa-brainslug/internal/alexa"
+	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
+	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
 )
 
@@ -71,4 +78,123 @@ func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("POST /alexa status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
+}
+
+func TestAlexaQuestionRoundTripThroughProviderAndHistory(t *testing.T) {
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/responses" {
+			t.Errorf("provider path = %q", request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("provider authorization header is missing")
+		}
+
+		var payload struct {
+			Model string `json:"model"`
+			Input string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode provider request: %v", err)
+		}
+		if payload.Model != "gpt-test" || payload.Input != "what is the test answer" {
+			t.Errorf("provider payload = %+v", payload)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"model": "gpt-test-2026",
+			"status": "completed",
+			"output_text": "The end-to-end answer is ready."
+		}`)
+	}))
+	t.Cleanup(providerServer.Close)
+
+	database, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "round-trip.db"))
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("store.Close() error = %v", err)
+		}
+	})
+
+	provider := providers.NewOpenAI(config.OpenAIConfig{
+		APIKey:          "test-key",
+		BaseURL:         providerServer.URL + "/v1",
+		Model:           "gpt-test",
+		MaxOutputTokens: 256,
+		Timeout:         5 * time.Second,
+	}, providerServer.Client())
+	application := app.NewService(app.Options{
+		Model:           "gpt-test",
+		MaxOutputTokens: 256,
+		SaveHistory:     true,
+	}, providers.AsAppProvider(provider), store.AsAppRepository(database))
+	const skillID = "amzn1.ask.skill.round-trip"
+	alexaHandler := alexa.NewHandler(alexa.Options{Verification: alexa.VerificationConfig{
+		VerifyRequests: false,
+		AllowedSkillID: skillID,
+	}}, application)
+	publicHandler := buildPublicHandler("", alexaHandler)
+
+	question := `{
+		"version": "1.0",
+		"session": {
+			"sessionId": "session-round-trip",
+			"application": {"applicationId": "amzn1.ask.skill.round-trip"},
+			"user": {"userId": "user-round-trip"}
+		},
+		"request": {
+			"type": "IntentRequest",
+			"intent": {
+				"name": "AskGPTIntent",
+				"slots": {"Query": {"name": "Query", "value": "what is the test answer"}}
+			}
+		}
+	}`
+	response := postPublicAlexa(t, publicHandler, question)
+	if response.Response.OutputSpeech == nil || response.Response.OutputSpeech.Text != "The end-to-end answer is ready." {
+		t.Fatalf("question speech = %#v", response.Response.OutputSpeech)
+	}
+
+	saved, err := database.GetLatestResponse(t.Context(), "user-round-trip")
+	if err != nil {
+		t.Fatalf("GetLatestResponse() error = %v", err)
+	}
+	if saved.Prompt != "what is the test answer" || saved.Model != "gpt-test-2026" || saved.Status != app.StatusOK {
+		t.Errorf("saved interaction = %+v", saved)
+	}
+
+	history := `{
+		"version": "1.0",
+		"session": {
+			"application": {"applicationId": "amzn1.ask.skill.round-trip"},
+			"user": {"userId": "user-round-trip"}
+		},
+		"request": {
+			"type": "IntentRequest",
+			"intent": {"name": "LastResponseIntent"}
+		}
+	}`
+	historyResponse := postPublicAlexa(t, publicHandler, history)
+	if historyResponse.Response.OutputSpeech == nil || historyResponse.Response.OutputSpeech.Text != "The end-to-end answer is ready." {
+		t.Fatalf("history speech = %#v", historyResponse.Response.OutputSpeech)
+	}
+}
+
+func postPublicAlexa(t *testing.T, handler http.Handler, body string) alexa.ResponseEnvelope {
+	t.Helper()
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alexa", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("POST /alexa status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	var response alexa.ResponseEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode Alexa response: %v", err)
+	}
+	return response
 }
