@@ -1,10 +1,10 @@
 # Progress Checks
 
-Use these checks before calling a project phase complete. Automated checks remain necessary but are not sufficient; most failures that matter here are architectural, security, or real-device behavior failures.
+Use these checks before merging or declaring a phase complete. Automated checks are necessary but cannot replace real Alexa validation.
 
 ## Automated Baseline
 
-Run locally:
+Run locally where Go 1.26 and dependencies are available:
 
 ```bash
 go build ./...
@@ -13,241 +13,311 @@ go tool golangci-lint run ./...
 go tool golangci-lint fmt ./...
 ```
 
-CI additionally checks:
+CI is configured to check:
 
-- `go vet`.
-- Race-enabled tests on Linux.
-- Tidy `go.mod` and `go.sum`.
-- Formatting.
-- Repository ASCII policy.
-- Docker image build.
-- Container startup and `/health` response.
+- build;
+- vet;
+- race-enabled tests;
+- tidy `go.mod` and `go.sum`;
+- linting;
+- formatting;
+- ASCII-only repository policy;
+- Docker image build;
+- container startup and administrative `/health`.
 
 Coverage is diagnostic, not a quota. A changed behavior needs a test that would fail against the previous behavior.
 
-## Current Baseline Snapshot
+## Current Implementation Snapshot
 
-Known implemented baseline:
+### Implemented in code
 
-- Go server, provider clients, SQLite, dashboard, Docker, and CI exist.
-- Provider and model selection are explicit.
-- Provider error redaction exists.
-- Alexa launch, ask, last response, help, fallback, stop, cancel, repeat, and session end are routed.
-- Caddy example limits the public route to `/alexa`.
+- [x] Transport-neutral application service.
+- [x] Provider adapter over the existing provider clients.
+- [x] SQLite adapter over the existing interactions store.
+- [x] ASK handler depends on the application interface.
+- [x] ASK signature and certificate verification infrastructure.
+- [x] Timestamp and skill-ID enforcement.
+- [x] Missing Alexa user identity is rejected.
+- [x] Public and administrative listeners are separate.
+- [x] Interaction model uses natural carrier phrases.
+- [x] Launch delegates into the required query dialog.
+- [x] OpenAI response statuses and output-limit exhaustion are classified.
 
-Known incomplete baseline:
+### Not implemented
 
-- Request verification does not accept real Alexa requests when enabled.
-- Alexa handler still owns provider calls and persistence orchestration.
-- Provider timeout can exceed the ASK deadline.
-- Deferred jobs and idempotency do not exist.
-- One-shot sample utterances are awkward.
-- Public and administrative routes share one listener.
-- Rate limiting, spend caps, complete principal scoping, and retention do not exist.
-- MCP does not exist and is intentionally gated.
+- [ ] Durable background jobs.
+- [ ] Request idempotency.
+- [ ] Pending, failed, canceled, and interrupted job states.
+- [ ] Rate limits.
+- [ ] Provider concurrency limit.
+- [ ] Global spend cap.
+- [ ] Retention and deletion.
+- [ ] MCP runtime adapter.
 
-Do not mark a later phase complete merely because the baseline tests still pass.
+### External validation still required
 
-## Phase 0: Real ASK Round Trip
+- [ ] CI runner completes all configured jobs.
+- [ ] Interaction model builds in Alexa Developer Console.
+- [ ] Real Amazon-signed request passes the verifier.
+- [ ] Physical Echo completes the two-turn flow.
 
-- [ ] A private custom skill exists in the developer console.
-- [ ] The actual skill ID is configured locally.
-- [ ] A path-scoped short-lived HTTPS route reaches `/alexa`.
-- [ ] Public `/`, `/history`, and `/health` return 404.
-- [ ] A real Echo invocation reaches the local log.
-- [ ] A low-cost provider answer is spoken.
-- [ ] A sanitized valid request fixture is saved for verification tests.
-- [ ] Raw user IDs, signatures, certificates, and credentials are removed from fixtures.
-- [ ] The public route is disabled after verification-disabled testing.
-
-## Phase 1: Application-Core Extraction
+## Application-Core Review
 
 Architecture:
 
-- [ ] A transport-neutral application package exists.
-- [ ] Application request and result types contain no ASK JSON types.
-- [ ] `internal/alexa` does not import provider implementations.
-- [ ] `internal/alexa` does not select system prompts or construct store records.
-- [ ] Latest-answer semantics live in the application service.
-- [ ] Provider and repository dependencies are narrow interfaces owned at the application boundary.
-- [ ] No MCP package, dynamic registry, or public API was added during the extraction.
+- [x] `internal/app` contains no ASK protocol types.
+- [x] `internal/alexa` does not import provider implementations.
+- [x] `internal/alexa` does not select the provider system prompt.
+- [x] `internal/alexa` does not construct SQLite records.
+- [x] Provider and repository dependencies are application-owned ports.
+- [x] Main process wiring selects concrete adapters.
+- [x] No MCP package or dynamic tool registry was introduced.
+
+Behavior:
+
+- [x] Prompt is normalized and validated.
+- [x] Principal is required.
+- [x] Configured model and output-token budget reach the provider adapter.
+- [x] Success and failure records respect `SAVE_HISTORY`.
+- [x] Provider diagnostics are redacted before persistence.
+- [x] History write failure does not suppress a successful spoken answer.
+- [x] Latest answer distinguishes no history, empty answer, and repository failure.
 
 Tests:
 
-- [ ] Application tests use fake provider and repository implementations.
-- [ ] Alexa adapter tests use a fake application service.
-- [ ] Provider tests still use local HTTP servers.
-- [ ] SQLite tests still use temporary databases.
-- [ ] Existing voice behavior remains intact.
+- [x] Application tests use fake provider and repository ports.
+- [x] ASK tests use a fake application service.
+- [x] Provider adapter mapping is tested.
+- [x] SQLite adapter round trip and not-found mapping are tested.
 
-## Phase 2: Safe ASK Ingress
+## ASK Verification Review
 
-Verification:
+Implementation:
 
-- [ ] Certificate URL constraints are enforced.
-- [ ] Certificate retrieval is bounded.
-- [ ] Trust chain and signing identity are validated.
-- [ ] Signature is verified against the exact raw body.
-- [ ] Timestamp freshness is enforced.
-- [ ] Allowed skill ID is enforced.
-- [ ] Verification failure returns HTTP 400 and does not call the application service.
+- [x] Raw body is preserved for signature verification.
+- [x] Certificate URL requires HTTPS.
+- [x] Certificate host is restricted to Amazon's signing host.
+- [x] Port and path constraints are enforced.
+- [x] Credentials, fragments, dot segments, and duplicate slashes are rejected.
+- [x] Redirects are revalidated.
+- [x] Certificate fetch has a timeout and size cap.
+- [x] PEM chain is parsed.
+- [x] Trust chain is verified.
+- [x] Alexa signing name is required.
+- [x] `Signature-256` is base64-decoded and checked with RSA SHA-256.
+- [x] Timestamp freshness is enforced.
+- [x] Allowed skill ID is enforced.
+- [x] Failure returns HTTP 400 before application execution.
+- [x] Signing certificates are cached only within validity and cache lifetime.
 
-Verification tests:
+Unit tests:
 
-- [ ] Valid fixture.
-- [ ] Tampered body.
-- [ ] Stale timestamp.
-- [ ] Wrong skill ID.
-- [ ] Disallowed certificate URL.
-- [ ] Invalid or expired certificate.
-- [ ] Oversized request body.
+- [x] Valid generated certificate chain and signature.
+- [x] Tampered body.
+- [x] Stale timestamp.
+- [x] Wrong skill ID.
+- [x] Missing headers.
+- [x] Disallowed certificate URL forms.
+- [x] Invalid signing name.
+- [x] Invalid root chain.
+- [x] Certificate cache behavior.
+- [x] Redirect behavior.
 
-Exposure:
+Real environment:
 
-- [ ] ASK and administrative listeners are separate.
-- [ ] Administrative listener binds to loopback by default.
-- [ ] Public hostname cannot reach `/`, `/history`, or `/health` even under a broad proxy rule.
-- [ ] Per-source and per-principal rate limits exist.
-- [ ] Provider concurrency is bounded.
-- [ ] Global request or spend cap fails closed.
-- [ ] Real Echo works with verification enabled.
+- [ ] Valid Amazon production request.
+- [ ] Alexa Developer Console request.
+- [ ] Physical Echo request.
+- [ ] Host clock and outbound certificate-fetch behavior confirmed.
 
-## Phase 3: ASK Usability And Deferred Work
+## Listener Isolation Review
 
-Invocation:
+- [x] Public mux registers only `POST /alexa`.
+- [x] Administrative mux registers `/health`, `/history`, and `/`.
+- [x] `ADMIN_SERVER_ADDR` defaults to loopback.
+- [x] Configuration rejects identical listener addresses.
+- [x] Configuration rejects a wildcard administrative bind.
+- [x] Docker maps both listeners to host loopback.
+- [x] Container health check uses port 8081.
+- [x] Caddy example proxies only `/alexa` to port 8080.
+- [x] Route-isolation tests confirm public admin paths return 404.
+- [ ] Public hostname is probed from outside the LAN.
+- [ ] Port 8081 is confirmed unreachable from the public internet.
 
-- [ ] Interaction model builds with natural carrier phrases.
-- [ ] `Alexa, open Brain Slug` elicits the full question.
-- [ ] `AMAZON.SearchQuery` captures the follow-up utterance.
-- [ ] At least `about`, `why`, `how`, and `to explain` one-shot forms work on a real Echo.
-- [ ] Help explains the one-shot and two-turn routes briefly.
-- [ ] No sample utterance names a third-party model product.
+## Invocation And Dialog Review
 
-Immediate result:
+Code and model:
 
-- [ ] A fast provider response is spoken in the same turn.
-- [ ] The application deadline is shorter than Alexa's external timeout.
-- [ ] The spoken answer is concise and voice-safe.
-- [ ] Full answer remains locally retrievable when history is enabled.
+- [x] `Query` uses `AMAZON.SearchQuery`.
+- [x] `Query` is required.
+- [x] One-shot samples use neutral carrier phrases.
+- [x] Duplicated `ask` wording is removed.
+- [x] Third-party model trademark is removed.
+- [x] ASK response types support directives.
+- [x] Launch returns `Dialog.Delegate` with an updated intent.
+- [x] Missing query does not call the application service.
+- [x] Help, fallback, stop, cancel, repeat, and last response remain routed.
 
-Deferred result:
+Alexa platform:
 
-- [ ] Job states include accepted, running, completed, failed, and canceled.
-- [ ] Accepted state is persisted before provider execution.
-- [ ] Slow work returns a pending acknowledgement before Alexa times out.
-- [ ] Background work uses an independent bounded deadline.
-- [ ] Worker concurrency and queue length are bounded.
-- [ ] Duplicate authenticated requests reuse the existing job.
-- [ ] `last response` distinguishes no history, pending, completed, and failed.
-- [ ] Shutdown or restart does not leave unexplained permanent running jobs.
+- [ ] Model builds in the selected locale.
+- [ ] Launch delegation is accepted.
+- [ ] Full follow-up utterance fills `Query`.
+- [ ] Current one-shot phrases work on a real Echo.
+- [ ] Activity history is reviewed for recognition failures.
 
-Provider policy:
+## Provider Review
 
-- [ ] Output-token defaults leave room for reasoning and visible text.
-- [ ] Reasoning or thinking effort is explicit where supported.
-- [ ] Provider and model do not silently change.
-- [ ] Empty visible output is a distinct diagnosable failure.
+Common:
 
-## Phase 4: Identity And Data Controls
+- [x] Provider and model selection are explicit.
+- [x] No silent provider or model fallback.
+- [x] Provider errors are mapped to stable application categories.
+- [x] Raw Alexa identity is not sent to the provider.
+- [x] Derived provider end-user identifier is hashed where supported.
+- [x] Provider timeout defaults below Alexa's external budget.
+- [x] Output-token cap is separate from spoken word shaping.
 
-- [ ] Every saved-data operation requires a namespaced principal.
-- [ ] Raw Alexa user IDs are transformed at the adapter boundary.
-- [ ] Raw platform identities are not sent to providers.
-- [ ] History, status, result, search, and delete operations enforce ownership inside the application layer.
-- [ ] Cross-principal reads fail in tests.
+OpenAI:
+
+- [x] Responses API request is explicit.
+- [x] Completed status is accepted.
+- [x] Incomplete status is classified.
+- [x] `max_output_tokens` exhaustion is distinct.
+- [x] Failed response message is redacted.
+- [x] Canceled, queued, and in-progress states do not masquerade as completed text.
+- [x] Nested output-text fallback is tested.
+- [ ] Real API request with the configured model is tested.
+- [ ] Actual latency distribution is measured.
+
+Anthropic:
+
+- [x] Explicit model and token cap.
+- [x] Provider adapter maps common failures.
+- [ ] Current configured model is tested with a real key.
+- [ ] Long-running or deferred strategy is defined before relying on it for deep mode.
+
+## Current Synchronous ASK Review
+
+- [x] Provider timeout default is six seconds.
+- [x] Successful answer is spoken and optionally saved.
+- [x] Timeout maps to a user-safe provider-busy response.
+- [x] Empty visible output is diagnosable.
+- [ ] Real Echo receives repeated synchronous answers before its timeout.
+
+Known limitations:
+
+- [ ] No accepted background state.
+- [ ] No idempotency against Alexa retries.
+- [ ] No way for `last response` to report pending work.
+- [ ] Slow reasoning is not reliable.
+
+## Deferred-Job Gate
+
+Do not call deferred work complete until all are true:
+
+- [ ] Job schema is append-only and transactional.
+- [ ] Adapter request ID is stored.
+- [ ] Idempotency scope includes adapter, principal, and request ID.
+- [ ] Accepted state is persisted before provider spending.
+- [ ] Immediate voice deadline is separate from job deadline.
+- [ ] Worker queue and concurrency are bounded.
+- [ ] Completed, failed, canceled, and interrupted states exist.
+- [ ] Restart recovery is deterministic.
+- [ ] Duplicate requests reuse the existing job.
+- [ ] Status and result reads enforce principal ownership.
+- [ ] Alexa pending, completed, and failed wording is tested.
+
+## Identity And Data Review
+
+- [x] Application operations require a namespaced principal.
+- [x] Missing Alexa identity is rejected.
+- [x] Latest-answer read is principal-scoped.
+- [x] Legacy Alexa history remains readable.
+- [x] Raw platform identity is not sent to providers.
+- [x] `SAVE_HISTORY=false` works.
+- [ ] Stored Alexa keys are migrated to explicit namespace form.
 - [ ] Retention by age and count exists.
-- [ ] Deletion is explicit and tested.
-- [ ] `SAVE_HISTORY=false` remains supported.
-- [ ] Dashboard states which principal scope is displayed.
-- [ ] Logs omit prompts and answers by default.
+- [ ] Per-principal deletion exists.
+- [ ] Dashboard principal scope is explicit.
+- [ ] Backups follow the same retention and access policy.
 
-## Application Quality Review
+## Rate And Spend Gate
 
-- [ ] Configuration is validated at startup.
-- [ ] Model and provider are explicit in config, health output, and saved metadata.
-- [ ] Stable error categories do not depend on parsing strings in adapters.
-- [ ] Provider diagnostics are redacted before storage or logging.
-- [ ] Request and job IDs support correlation without exposing credentials or raw platform IDs.
-- [ ] Schema migrations are append-only, transactional, and tested from older versions.
-- [ ] Shutdown drains listeners and workers under bounded deadlines.
-- [ ] No unbounded goroutine, queue, request body, result body, or retry loop exists.
+Before continuous public exposure:
+
+- [ ] Per-source network limit.
+- [ ] Per-principal limit.
+- [ ] Maximum prompt length.
+- [ ] Bounded provider concurrency.
+- [ ] Global daily request, token, or cost cap.
+- [ ] Fail-closed behavior when the cap is reached.
+- [ ] Limits are observable through private administration.
+- [ ] Limit errors do not reveal private counters publicly.
 
 ## Local Deployment Review
 
-- [ ] Container starts as the intended unprivileged user.
-- [ ] SQLite data persists in the mounted volume.
-- [ ] `SQLITE_PATH` resolves to a writable mounted location.
-- [ ] Local `/health` reports status, provider, and model without secrets.
-- [ ] Public routing is limited to `/alexa`.
-- [ ] Administrative routes are loopback-only after the listener split.
-- [ ] Provider keys are supplied through a noncommitted environment file, mounted secret, or secret manager.
-- [ ] Public route state is documented after testing.
-
-## Future Capability Review
-
-Do not perform this review until Phases 1 through 4 are complete.
-
-- [ ] Each capability represents one user-visible operation.
-- [ ] Input and output schemas are typed.
-- [ ] Authorization is application-owned.
-- [ ] Long-running operations return accepted state.
-- [ ] No generic dynamic invocation interface was added without a concrete adapter need.
-- [ ] ASK and local administration reuse the same application operations where appropriate.
+- [x] Container runs with dropped capabilities.
+- [x] Filesystem is read-only outside the data volume.
+- [x] SQLite data persists under `./data`.
+- [x] ASK port is host-loopback only.
+- [x] Administrative port is host-loopback only.
+- [x] Administrative `/health` reports provider and model without secrets.
+- [x] Public port has no administrative routes.
+- [ ] Real Caddy or Tunnel route is tested.
+- [ ] Real certificate retrieval works from the container.
+- [ ] Restart preserves history.
 
 ## MCP Entry Gate
 
 All applicable items must be true before MCP implementation begins:
 
-- [ ] A named target MCP host exists.
-- [ ] Amazon access exists if Alexa+ is the target.
-- [ ] The target protocol version is confirmed.
-- [ ] Service and user authentication requirements are confirmed.
-- [ ] Proposed tools provide value beyond a generic LLM relay.
-- [ ] Synchronous tools have a credible latency path.
-- [ ] Voice-only behavior exists for Alexa+ tools.
-- [ ] Exact policy and certification requirements have been reviewed.
-- [ ] The application core already supplies principal scoping, idempotency, jobs, retention, and stable errors.
+- [ ] Named target MCP host.
+- [ ] Amazon access if Alexa+ is the target.
+- [ ] Confirmed protocol version.
+- [ ] Confirmed service and user authentication.
+- [ ] Tool set has value beyond generic LLM relay.
+- [ ] Credible latency path for synchronous tools.
+- [ ] Voice-only behavior for Alexa+.
+- [ ] Exact policy and certification review.
+- [ ] Durable jobs, principal scoping, idempotency, retention, and stable errors already exist.
 
 If any item is false, keep MCP gated.
 
-## MCP Adapter Review
-
-When the gate is met:
-
-- [ ] MCP protocol types remain inside the adapter.
-- [ ] ASK verification and MCP OAuth are separate.
-- [ ] Authenticated subjects map to a separate principal namespace.
-- [ ] Tool discovery exposes only the selected profile.
-- [ ] No tool accepts a caller-supplied user ID as authorization.
-- [ ] No production Alexa+ profile is centered on `chat(prompt)` or `ask_model(prompt)`.
-- [ ] Slow model work does not block a synchronous tool beyond the host budget.
-- [ ] Structured results and stable errors contain no private diagnostics.
-- [ ] Optional UI has a complete voice-only fallback.
-- [ ] MCP listener is separate from ASK and administration.
-
 ## Manual Smoke Test
 
-With no public exposure, local health:
+Administrative health:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8080/health
+Invoke-RestMethod http://127.0.0.1:8081/health
 ```
 
 Expected:
 
-- `status` is `ok`.
-- `provider` matches `AI_PROVIDER`.
-- `model` matches the configured model.
-- No credentials are returned.
+- `status` is `ok`;
+- provider matches `AI_PROVIDER`;
+- model matches the configured provider model;
+- Alexa verification state is visible;
+- no credentials are returned.
 
-For a real Echo smoke test, follow `alexa-skill-setup.md`. Do not leave verification disabled or the tunnel running after the controlled test.
+Public route probes:
 
-## Review Discipline
+```powershell
+Invoke-WebRequest http://127.0.0.1:8080/ -SkipHttpErrorCheck
+Invoke-WebRequest http://127.0.0.1:8080/history -SkipHttpErrorCheck
+Invoke-WebRequest http://127.0.0.1:8080/health -SkipHttpErrorCheck
+```
 
-A milestone is not complete when its code exists. It is complete when:
+All should return 404.
 
-- The exit criteria in `project-plan.md` are satisfied.
-- The relevant checks above pass.
-- Real-device behavior is documented where the platform cannot be simulated reliably.
-- Known gaps are moved forward explicitly rather than hidden in prose.
-- The documentation describes the code that actually shipped, not only the target design.
+For real Alexa testing, follow `alexa-skill-setup.md` and leave verification enabled.
+
+## Completion Discipline
+
+A milestone is complete only when:
+
+- the corresponding exit criteria in `project-plan.md` are satisfied;
+- automated checks run successfully;
+- real-device behavior is documented where simulation is insufficient;
+- known gaps remain explicit;
+- documentation describes the code that actually exists.
