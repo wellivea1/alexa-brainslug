@@ -132,7 +132,6 @@ func run() error {
 
 	errs := make(chan error, len(servers))
 	for _, server := range servers {
-		server := server
 		go serve(server, errs)
 	}
 
