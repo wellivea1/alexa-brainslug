@@ -1,10 +1,10 @@
 # Invocation Design
 
-## Decision
+## Current Decision
 
 Use a classic ASK custom skill with explicit invocation.
 
-Recommended baseline:
+Primary flow:
 
 ```text
 Alexa, open Brain Slug
@@ -12,101 +12,84 @@ Brainslug is ready. What should I ask?
 <free-form question>
 ```
 
-Recommended one-shot forms after the interaction-model rewrite:
-
-```text
-Alexa, ask Brain Slug about the halting problem
-Alexa, ask Brain Slug why my sourdough is dense
-Alexa, ask Brain Slug how quantum tunneling works
-Alexa, tell Brain Slug to explain the Monty Hall problem
-```
-
-Do not depend on name-free interaction or Alexa+ Natural Discovery for generic questions. Alexa+ normally has its own answer path and is not required to route an unnamed question to this private custom skill.
+The interaction model and response types now implement this two-turn design. The remaining gate is validation in the Alexa Developer Console and on a physical Echo.
 
 ## Adapter Boundary
 
-Invocation handling belongs to the ASK adapter.
+Invocation handling belongs to `internal/alexa`.
 
-The adapter owns:
+The ASK adapter owns:
 
-- Invocation name and interaction model.
-- Intent and slot mapping.
-- Dialog directives and reprompts.
-- Alexa-specific speech for completed, pending, failed, help, and stop states.
+- invocation name and interaction model;
+- intents and slots;
+- dialog directives;
+- ASK reprompts and spoken messages;
+- mapping Alexa identity and session data to application types.
 
 The application service owns:
 
-- Submitting the question.
-- Deciding whether the result completed or remains pending.
-- Provider execution and job lifecycle.
-- Saving and retrieving the caller's answer.
+- provider execution;
+- model and output-token policy;
+- persistence;
+- latest-answer lookup;
+- stable failure categories;
+- future job lifecycle.
 
-The Alexa handler should not invoke a provider directly after the application-core extraction.
+The Alexa handler no longer invokes provider clients or constructs store records directly.
 
-## How Alexa Composes One-Shot Utterances
+## Current Interaction Model
 
-Alexa joins an invocation phrase to a sample utterance:
-
-```text
-[invocation phrase]        + [sample utterance]
-"ask brain slug"             "about the halting problem"
-```
-
-The sample must read as the tail of a sentence that already begins with `ask Brain Slug`, `tell Brain Slug`, `open Brain Slug and`, or another supported invocation form.
-
-The current interaction model uses samples such as:
+Invocation name:
 
 ```text
-ask {Query}
-send {Query}
-question {Query}
-ask chat g p t {Query}
+brain slug
 ```
 
-These produce poor phrases:
+Question intent:
 
 ```text
-Alexa, ask Brain Slug ask what is SQLite
-Alexa, ask Brain Slug send what is SQLite
+AskGPTIntent
+  Query: AMAZON.SearchQuery, required
 ```
 
-The third-party product name also should not appear in a certification-bound interaction model.
-
-## AMAZON.SearchQuery Constraint
-
-`Query` uses `AMAZON.SearchQuery`. It is the appropriate built-in slot for flexible question text, but Amazon requires a carrier phrase around the slot in intent samples.
-
-A sample containing only:
-
-```text
-{Query}
-```
-
-is rejected by the model builder.
-
-Use a small set of natural carrier phrases rather than a large brittle utterance list.
-
-Recommended one-shot samples:
+Current one-shot samples:
 
 ```text
 about {Query}
-what is {Query}
-why {Query}
-how {Query}
-whether {Query}
-explain {Query}
-to explain {Query}
-for {Query}
-the answer to {Query}
+regarding {Query}
+to answer {Query}
+the question {Query}
+this question {Query}
 ```
 
-These should be tested in the Alexa Developer Console before replacing the shipped model. Amazon may reject or resolve some combinations differently from what looks valid on paper.
+Representative complete utterances:
+
+```text
+Alexa, ask Brain Slug about the halting problem
+Alexa, ask Brain Slug regarding SQLite write-ahead logging
+Alexa, tell Brain Slug to answer why the sky is blue
+Alexa, ask Brain Slug the question whether a TPU laptop would be useful
+```
+
+These carriers are deliberately neutral. Alexa sends the slot value rather than the full carrier phrase, so the words outside `{Query}` should not be required to preserve the question's meaning.
+
+The previous samples `ask {Query}`, `send {Query}`, `question {Query}`, and `ask chat g p t {Query}` were removed because they produced awkward or certification-unfriendly phrases.
 
 ## Two-Turn Flow
 
-The two-turn flow is the primary flexible path because slot elicitation can capture the user's whole follow-up utterance without requiring the user to say a carrier phrase.
+`LaunchRequest` currently returns:
 
-Target behavior:
+- spoken prompt `Brainslug is ready. What should I ask?`;
+- `Dialog.Delegate` directive;
+- an updated `AskGPTIntent` with an unfilled `Query` slot.
+
+The interaction model marks `Query` required and provides the elicitation prompt:
+
+```text
+What should I ask?
+```
+
+Target exchange:
 
 ```text
 User:  Alexa, open Brain Slug
@@ -114,108 +97,133 @@ Alexa: Brainslug is ready. What should I ask?
 User:  Explain why disappearing polymorphs are difficult to reproduce.
 ```
 
-Implementation requirements:
+The Developer Console must confirm that launch-to-dialog delegation is accepted for the selected locale and that the full follow-up utterance fills `Query`.
 
-- Mark `Query` as required in the dialog model.
-- Delegate or explicitly elicit the slot when it is missing.
-- Model ASK directives in the response types.
-- Preserve stop, cancel, help, fallback, and session-ended behavior.
-- Normalize whitespace but do not rewrite the user's question in the adapter.
+If Amazon requires a different launch-chaining shape, change the checked-in response and interaction model together and add a fixture test.
 
-The two-turn flow should be the documented fallback whenever a one-shot phrase is not recognized.
+## AMAZON.SearchQuery Constraints
 
-## Completed And Deferred Responses
+`AMAZON.SearchQuery` is the appropriate built-in slot for broad question text, but normal sample utterances need a carrier phrase. A sample containing only:
 
-A provider result may or may not fit inside the ASK request deadline.
+```text
+{Query}
+```
 
-### Completed in the same turn
+is rejected by Alexa's model builder.
+
+Slot elicitation is the more flexible path because the user's next utterance can fill the required slot without a one-shot carrier.
+
+Design rules:
+
+- only one search-query slot in the intent;
+- do not combine it with another slot in the same utterance;
+- keep carrier phrases small and semantically neutral;
+- use real activity-history evidence before adding samples;
+- do not attempt to enumerate every question form.
+
+## Current Response Behavior
+
+### Completed answer
 
 ```text
 User:  Alexa, ask Brain Slug about SQLite write-ahead logging.
 Alexa: <concise answer>
 ```
 
-The ASK adapter receives a completed application result and speaks the voice-safe answer.
+The application returns a completed transport-neutral answer. The ASK adapter trims and speaks the short form. The full form is stored when history is enabled.
 
-### Accepted for deferred completion
+### Provider timeout or unavailable provider
+
+```text
+Alexa: The AI provider is busy right now. Try again in a moment.
+```
+
+This is currently a failure, not an accepted deferred job.
+
+### Output-token exhaustion
+
+```text
+Alexa: The AI provider ran out of room before it answered. The response limit may be too low.
+```
+
+OpenAI incomplete responses caused by `max_output_tokens` map to a stable output-limit category and then to this spoken response.
+
+### Last response
+
+Current `LastResponseIntent` returns the latest successful nonempty saved answer owned by the Alexa principal.
+
+Current states:
+
+- no successful history -> no previous response;
+- completed saved answer -> speak it;
+- repository failure -> local history error;
+- empty saved success -> empty-response message.
+
+There is no pending or canceled job state yet.
+
+## Deferred Response Design
+
+Deferred behavior remains planned rather than implemented.
+
+Target accepted flow:
 
 ```text
 User:  Alexa, ask Brain Slug to compare three explanations of the Fermi paradox.
-Alexa: I am working on that. Ask Brain Slug for the last response in a moment.
+Alexa: I am working on that. Ask Brain Slug for the last response later.
 ```
 
-The exact wording may change after device testing, but it must:
-
-- Confirm that the request was accepted.
-- Avoid promising a completion time.
-- Tell the user how to retrieve the result.
-- End before Alexa's request deadline.
-
-The provider job continues under an application-owned deadline independent of the Alexa HTTP request.
-
-### Pending retrieval
+Target retrieval states:
 
 ```text
-User:  Alexa, ask Brain Slug for the last response.
-Alexa: I am still working on it.
+pending   -> I am still working on it.
+completed -> <concise saved answer>
+failed    -> I could not finish that request.
+canceled  -> That request was canceled.
 ```
 
-### Completed retrieval
+The exact wording should be chosen after the durable job state machine exists. Do not add pending speech before the application can persist and recover the job it claims to have accepted.
 
-```text
-User:  Alexa, ask Brain Slug for the last response.
-Alexa: <concise saved answer>
-```
+## Help And Fallback
 
-### Failed retrieval
+Current help explains that the user can ask Brain Slug a question and request the last response.
 
-```text
-User:  Alexa, ask Brain Slug for the last response.
-Alexa: I could not finish that request. Try asking again.
-```
+Fallback keeps the session open and prompts for the question again.
 
-The adapter may distinguish operator misconfiguration, provider congestion, and an exhausted output budget when that distinction gives the listener a useful next step. It must not speak provider diagnostics or credentials.
+Real-device testing should determine whether help needs to give an explicit one-shot example or emphasize the two-turn flow.
 
-## Last Response Semantics
+## Repeat
 
-`LastResponseIntent` should mean the latest job owned by the authenticated principal, not the latest row in the database globally.
+`AMAZON.RepeatIntent` currently shares the `last response` path. It retrieves the latest saved answer rather than tracking the last speech object in the active session.
 
-Recommended rules:
-
-1. If the latest job is running, report pending.
-2. If it completed, speak the short answer.
-3. If it failed, speak a stable user-safe failure message.
-4. If there is no job, say no previous response exists.
-5. Repeat may replay the last spoken answer, but it should not accidentally select a different user's record.
-
-After deferred jobs exist, consider separate phrases for status and completed history only if real-device testing shows the single `last response` concept is confusing.
+This is simple and deterministic, but it is not a semantically perfect implementation of Alexa's usual repeat behavior. Revisit it only if physical-device testing shows confusion.
 
 ## Follow-Up Questions
 
-Do not add general follow-up conversation in the same change as slot elicitation and deferred jobs.
+General multi-turn provider context is not implemented.
 
-A follow-up feature needs explicit answers to:
+A follow-up design must decide:
 
-- Which prior turns are sent to the provider.
-- How long a conversation remains active.
-- Whether a deferred answer belongs to the same conversation.
-- How history is scoped and deleted.
-- How token growth is bounded.
+- which prior turns are included;
+- how conversation ownership is stored;
+- how long a conversation remains active;
+- whether deferred answers belong to the same conversation;
+- how token growth is bounded;
+- how the conversation is deleted.
 
-The existing provider request type has room for prior context, but that is not a complete conversation design. Keep the first usable version one question per job.
+The Alexa session remaining open briefly does not create provider conversation state.
 
 ## Optional User Routine
 
-A user-created Alexa Routine may provide a shorter personal launch phrase, for example:
+A user-created Alexa Routine may provide a shorter private launch phrase:
 
 ```text
 When I say: think hard
 Custom action: open Brain Slug
 ```
 
-This only launches the skill. The user still supplies the question in the second turn.
+This only launches the skill; the question is supplied in the follow-up turn.
 
-Do not build product logic around provisioning routines. Alexa Routines Kit was retired, so this remains an optional manual convenience for the owner.
+Do not make the product depend on programmatic routine provisioning.
 
 ## Invocation Name
 
@@ -223,47 +231,52 @@ Keep `brain slug` unless real-device recognition is poor.
 
 Reasons:
 
-- Distinctive.
-- Two words.
-- Easy to hear and say.
-- Already represented in the repository.
-- Reads naturally with `about`, `why`, `how`, and `to explain` carriers.
+- distinctive;
+- two words;
+- easy to say;
+- already represented in the repository;
+- reads naturally with the current carrier phrases.
 
-Do not switch names merely to avoid a two-turn flow. The interaction-model constraints remain.
+Changing the name does not remove the `AMAZON.SearchQuery` carrier and dialog constraints.
 
 ## Name-Free Interaction
 
-`CanFulfillIntentRequest` and ASK name-free interaction are not the same as Alexa+ Natural Discovery. Neither should be a dependency for Brainslug's core use case.
+Do not depend on ASK name-free interaction or Alexa+ Natural Discovery.
 
-Reasons to skip it initially:
+Reasons:
 
-- Generic questions compete with Alexa's own answer path.
-- Routing is not guaranteed.
-- Availability and eligibility vary.
-- Explicit invocation is easier to test and explain.
+- generic questions compete with Alexa's own answer path;
+- routing is not guaranteed;
+- eligibility and availability vary;
+- explicit invocation is easier to test and explain.
 
-The application architecture should not know whether an adapter was reached by explicit invocation or another platform routing mechanism.
+The application core remains independent of how an inbound adapter was selected.
 
-## Interaction Model Acceptance Tests
+## Validation Checklist
 
-Before calling the invocation rewrite complete:
+Code-level:
 
-- The model builds without warnings or unsupported utterances.
-- `Alexa, open Brain Slug` elicits a missing query.
-- The full follow-up utterance fills `Query`.
-- At least the recommended `about`, `why`, `how`, and `to explain` one-shot forms work on a real Echo.
-- Stop and cancel end the session.
-- Help explains both one-shot and two-turn use briefly.
-- Fallback returns to question elicitation rather than ending unnecessarily.
-- A pending application result produces the deferred acknowledgement.
-- `last response` distinguishes no history, pending, completed, and failed states.
-- No sample utterance contains a third-party model or product trademark.
+- [x] Interaction model contains no duplicated `ask` carrier.
+- [x] Third-party model trademark removed from samples.
+- [x] `Query` is required.
+- [x] Dialog response directive is represented in Go.
+- [x] Launch delegates to the question intent.
+- [x] ASK tests use a fake application service.
+- [x] Output-limit and provider failures map to stable speech.
 
-## Open Decisions For Device Testing
+Alexa platform:
 
-- Exact pending acknowledgement wording.
-- Whether a completed answer should keep the session open for one follow-up.
-- Whether `last response` and `status` need separate intents.
-- Whether `repeat` should replay only the current session response or the latest stored answer.
+- [ ] Interaction model builds in the selected locale.
+- [ ] `Alexa, open Brain Slug` elicits the full question.
+- [ ] Follow-up utterance fills `Query` without truncation.
+- [ ] Current one-shot phrases work on a real Echo.
+- [ ] Help, fallback, stop, cancel, repeat, and last response behave naturally.
+- [ ] Activity history confirms whether failures are ASR, model routing, or backend errors.
 
-These decisions should be made from real Echo behavior after the basic two-turn flow works, not from interaction-model speculation alone.
+## Open Decisions After Device Testing
+
+- Whether to add a small number of `why` or `how` one-shot carriers.
+- Exact help wording.
+- Whether repeat should track only the current session's last spoken output.
+- Whether a completed answer should keep the session open for one explicit follow-up.
+- Exact pending/status wording after deferred jobs exist.
