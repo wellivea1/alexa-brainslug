@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const providerRoleUser = "user"
+
 // Provider is an AI backend that can answer a single question.
 //
 // Implementations must be safe for concurrent use and must respect the

@@ -141,6 +141,38 @@ func TestRuntimeSettingsCanRestoreProviderResponseControlDefaults(t *testing.T) 
 	}
 }
 
+func TestRuntimeSettingsSelectChatGPTAndDerivePrivateCredentialPath(t *testing.T) {
+	directory := t.TempDir()
+	settingsPath := filepath.Join(directory, "brainslug.settings.json")
+	databasePath := filepath.Join(directory, "brainslug.db")
+	settings := RuntimeSettings{
+		Provider: ProviderOpenAI,
+		OpenAI: OpenAIRuntimeSettings{
+			ProviderRuntimeSettings: ProviderRuntimeSettings{Model: "gpt-5.6-terra", MaxOutputTokens: 1024, TimeoutSeconds: 6},
+			AuthMode:                OpenAIAuthModeChatGPT,
+		},
+	}
+	if err := SaveRuntimeSettings(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUNTIME_SETTINGS_PATH", settingsPath)
+	t.Setenv("SQLITE_PATH", databasePath)
+	t.Setenv("OPENAI_MODEL", "gpt-environment")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenAI.AuthMode != OpenAIAuthModeChatGPT {
+		t.Fatalf("AuthMode = %q", cfg.OpenAI.AuthMode)
+	}
+	wantAuthPath := filepath.Join(directory, "brainslug.openai-auth.json")
+	if cfg.OpenAI.ChatGPTAuthFile != wantAuthPath {
+		t.Fatalf("ChatGPTAuthFile = %q, want %q", cfg.OpenAI.ChatGPTAuthFile, wantAuthPath)
+	}
+}
+
 func TestValidateRejectsUnknownOpenAIResponseControls(t *testing.T) {
 	cfg := Config{
 		ServerAddr:          "127.0.0.1:8080",
@@ -159,6 +191,11 @@ func TestValidateRejectsUnknownOpenAIResponseControls(t *testing.T) {
 	cfg.OpenAI.TextVerbosity = "verbose"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() accepted an unsupported text verbosity")
+	}
+	cfg.OpenAI.TextVerbosity = "low"
+	cfg.OpenAI.AuthMode = "password"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported OpenAI authentication mode")
 	}
 }
 

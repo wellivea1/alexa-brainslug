@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{{.PageTitle}} · Brainslug</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=3">
+  <link rel="stylesheet" href="/assets/dashboard.css?v=4">
 </head>
 <body>
   <div class="app-shell">
@@ -225,18 +225,41 @@
               <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
               <input type="hidden" name="section" value="inference">
               <input type="hidden" name="provider" value="openai">
-              <div class="form-grid">
-                <label class="field"><span>Model</span><input name="model" list="openai-models" value="{{.Inference.OpenAI.Model}}" required autocomplete="off"><small>Choose a suggested model or enter an exact compatible model ID.</small></label>
-                <label class="field"><span>Base URL</span><input type="url" name="base_url" value="{{.Inference.OpenAI.BaseURL}}" placeholder="https://api.openai.com/v1"><small>Leave blank for the official OpenAI endpoint.</small></label>
-              </div>
+              <section class="form-section" aria-labelledby="openai-auth-title">
+                <header class="form-section-head"><div><strong id="openai-auth-title">Authentication</strong><small>Choose one credential path.</small></div></header>
+                <div class="auth-options">
+                  <div class="auth-choice {{if eq .Inference.OpenAI.AuthMode "api_key"}}is-selected{{end}}">
+                    <input id="openai-auth-api" type="radio" name="auth_mode" value="api_key" {{if eq .Inference.OpenAI.AuthMode "api_key"}}checked{{end}}>
+                    <label for="openai-auth-api"><strong>OpenAI API key</strong><small>Official OpenAI API</small></label>
+                    <span class="connection-state {{if .Inference.OpenAI.APIKeyConfigured}}text-ok{{else}}text-warn{{end}}">{{.Inference.OpenAI.APIKeySource}}</span>
+                  </div>
+                  <div class="auth-choice {{if eq .Inference.OpenAI.AuthMode "chatgpt"}}is-selected{{end}}">
+                    <input id="openai-auth-chatgpt" type="radio" name="auth_mode" value="chatgpt" {{if eq .Inference.OpenAI.AuthMode "chatgpt"}}checked{{end}}>
+                    <label for="openai-auth-chatgpt"><strong>ChatGPT account</strong><small>Plus / Pro account · Codex connector</small></label>
+                    <span class="connection-state {{if .OpenAIAuth.Connected}}text-ok{{else}}text-warn{{end}}">{{if .OpenAIAuth.Connected}}Connected{{else}}Not connected{{end}}</span>
+                    <span class="auth-actions">
+                      <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/openai/browser">{{if .OpenAIAuth.Connected}}Reconnect{{else}}Connect{{end}}</button>
+                      <button class="button button-quiet" type="submit" formnovalidate formaction="/auth/openai/device/start">Use code</button>
+                      {{if .OpenAIAuth.Connected}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/openai/disconnect">Disconnect</button>{{end}}
+                    </span>
+                  </div>
+                </div>
+              </section>
+              <section class="form-section" aria-labelledby="openai-model-title">
+                <header class="form-section-head"><div><strong id="openai-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
+                <div class="form-rows">
+                  <label class="field"><span>Model</span><span class="field-control"><input name="model" list="openai-models" value="{{.Inference.OpenAI.Model}}" required autocomplete="off"><small>Suggested model or exact compatible model ID.</small></span></label>
+                  <label class="field"><span>Base URL</span><span class="field-control"><input type="url" name="base_url" value="{{.Inference.OpenAI.BaseURL}}" placeholder="https://api.openai.com/v1"><small>Used only in API-key mode; blank selects the official endpoint.</small></span></label>
+                </div>
+              </section>
               <datalist id="openai-models">{{range .OpenAIModels}}<option value="{{.ID}}">{{.Name}} — {{.Description}}</option>{{end}}</datalist>
               <details class="advanced-settings">
                 <summary>Request settings</summary>
-                <div class="advanced-grid">
-                  <label class="field"><span>Reasoning effort</span><select name="reasoning_effort"><option value="" {{if eq .Inference.OpenAI.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.OpenAI.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.OpenAI.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.OpenAI.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.OpenAI.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select><small>Use provider default for broad compatibility.</small></label>
-                  <label class="field"><span>Text verbosity</span><select name="text_verbosity"><option value="" {{if eq .Inference.OpenAI.TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .Inference.OpenAI.TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.TextVerbosity "high"}}selected{{end}}>High</option></select></label>
-                  <label class="field"><span>Maximum output tokens</span><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.OpenAI.MaxOutputTokens}}" required></label>
-                  <label class="field"><span>Timeout in seconds</span><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.OpenAI.TimeoutSeconds}}" required></label>
+                <div class="form-rows advanced-grid">
+                  <label class="field"><span>Reasoning effort</span><span class="field-control"><select name="reasoning_effort"><option value="" {{if eq .Inference.OpenAI.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.OpenAI.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.OpenAI.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.OpenAI.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.OpenAI.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select><small>Provider default is safest for compatible endpoints.</small></span></label>
+                  <label class="field"><span>Text verbosity</span><span class="field-control"><select name="text_verbosity"><option value="" {{if eq .Inference.OpenAI.TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .Inference.OpenAI.TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.TextVerbosity "high"}}selected{{end}}>High</option></select></span></label>
+                  <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.OpenAI.MaxOutputTokens}}" required></span></label>
+                  <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.OpenAI.TimeoutSeconds}}" required></span></label>
                 </div>
               </details>
               <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.OpenAI.Active}}Save settings{{else}}Use OpenAI{{end}}</button></div>
@@ -276,6 +299,26 @@
         </section>
         {{end}}
       </main>
+
+      {{with .DeviceAuth}}
+      <div class="auth-backdrop">
+        <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="device-auth-title">
+          <header><div><p class="eyebrow">ChatGPT account</p><h2 id="device-auth-title">Enter this code</h2></div><a class="dialog-close" href="/?section=inference&amp;provider=openai" aria-label="Close">×</a></header>
+          <div class="auth-dialog-body">
+            <p>Open the sign-in page, enter the code, then return here.</p>
+            <code class="device-code">{{.UserCode}}</code>
+            <div class="dialog-actions">
+              <a class="button button-primary" href="{{.VerificationURL}}" target="_blank" rel="noopener">Open OpenAI sign-in</a>
+              <form method="post" action="/auth/openai/device/poll">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <input type="hidden" name="device_id" value="{{.ID}}">
+                <button class="button button-secondary" type="submit">Check connection</button>
+              </form>
+            </div>
+          </div>
+        </section>
+      </div>
+      {{end}}
 
       <footer>
         <span>Generated {{timestamp .GeneratedAt}}</span>

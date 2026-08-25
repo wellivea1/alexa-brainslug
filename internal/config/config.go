@@ -23,6 +23,9 @@ import (
 const (
 	ProviderOpenAI    = "openai"
 	ProviderAnthropic = "anthropic"
+
+	OpenAIAuthModeAPIKey  = "api_key"
+	OpenAIAuthModeChatGPT = "chatgpt"
 )
 
 // Defaults applied when a variable is unset. A variable that is set but
@@ -88,6 +91,8 @@ type Config struct {
 type OpenAIConfig struct {
 	APIKey          string
 	APIKeyFile      string
+	AuthMode        string
+	ChatGPTAuthFile string
 	Model           string
 	BaseURL         string
 	MaxOutputTokens int
@@ -167,6 +172,8 @@ func Load() (Config, error) {
 		OpenAI: OpenAIConfig{
 			APIKey:          env.str("OPENAI_API_KEY", ""),
 			APIKeyFile:      env.str("OPENAI_API_KEY_FILE", ""),
+			AuthMode:        strings.ToLower(env.str("OPENAI_AUTH_MODE", OpenAIAuthModeAPIKey)),
+			ChatGPTAuthFile: env.str("OPENAI_CHATGPT_AUTH_FILE", ""),
 			Model:           env.str("OPENAI_MODEL", ""),
 			BaseURL:         env.str("OPENAI_BASE_URL", ""),
 			MaxOutputTokens: env.intVal("OPENAI_MAX_OUTPUT_TOKENS", defaultOpenAIMaxOutputTokens),
@@ -196,6 +203,7 @@ func Load() (Config, error) {
 	if err := cfg.applyRuntimeSettingsFile(); err != nil {
 		return Config{}, err
 	}
+	cfg.OpenAI.ChatGPTAuthFile = resolveOpenAIAuthPath(cfg.OpenAI.ChatGPTAuthFile, cfg.SQLitePath)
 
 	if err := cfg.loadSecretFiles(); err != nil {
 		return Config{}, err
@@ -250,6 +258,9 @@ func (c *Config) Validate() error {
 
 	switch c.Provider {
 	case ProviderOpenAI:
+		if strings.TrimSpace(c.OpenAI.AuthMode) == "" {
+			c.OpenAI.AuthMode = OpenAIAuthModeAPIKey
+		}
 		if err := validateProvider("OPENAI", c.OpenAI.Model, c.OpenAI.MaxOutputTokens, c.OpenAI.Timeout); err != nil {
 			return err
 		}
@@ -258,6 +269,9 @@ func (c *Config) Validate() error {
 		}
 		if strings.TrimSpace(c.OpenAI.TextVerbosity) != "" && !oneOf(c.OpenAI.TextVerbosity, "low", "medium", "high") {
 			return errors.New("OPENAI_TEXT_VERBOSITY must be one of low, medium, high")
+		}
+		if !oneOf(c.OpenAI.AuthMode, OpenAIAuthModeAPIKey, OpenAIAuthModeChatGPT) {
+			return errors.New("OPENAI_AUTH_MODE must be one of api_key, chatgpt")
 		}
 		return nil
 	case ProviderAnthropic:

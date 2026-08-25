@@ -204,6 +204,9 @@ Completed implementation:
 - explicit handling of OpenAI incomplete and failed statuses;
 - output-token exhaustion is a stable diagnosable category;
 - provider and model do not silently change.
+- OpenAI API-key mode and the optional OpenCode-compatible ChatGPT account
+  mode are explicit; account login supports PKCE browser and device-code flows,
+  refreshable local credentials, and disconnect.
 
 Limitation:
 

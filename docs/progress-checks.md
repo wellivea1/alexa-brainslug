@@ -278,6 +278,7 @@ Before continuous public exposure:
 - [x] Administrative `/health` reports provider and model without secrets.
 - [x] Dashboard provides overview, searchable activity, and integrated provider management.
 - [x] Provider/model changes activate without restart and persist without credentials.
+- [x] OpenAI API-key and ChatGPT account authentication are distinct, with PKCE browser login, code fallback, refresh, disconnect, and secret-free dashboard state.
 - [x] Dashboard is visually checked at desktop and phone breakpoints.
 - [x] Public port has no administrative routes.
 - [ ] Real Caddy or Tunnel route is tested.

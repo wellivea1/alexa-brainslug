@@ -14,6 +14,13 @@ import (
 
 type stubProvider struct{}
 
+type stubChatGPTCredentials struct{ connected bool }
+
+func (s stubChatGPTCredentials) Connected() bool { return s.connected }
+func (s stubChatGPTCredentials) Token(context.Context) (accessToken, accountID string, err error) {
+	return "access", "account", nil
+}
+
 func (stubProvider) Name() string { return "stub" }
 func (stubProvider) Ask(_ context.Context, _ app.ProviderRequest) (app.ProviderResponse, error) {
 	return app.ProviderResponse{}, nil
@@ -89,6 +96,46 @@ func TestSnapshotNeverExposesCredential(t *testing.T) {
 	}
 	if strings.Contains(snapshot.OpenAI.EffectiveBaseURL, "secret-value") {
 		t.Fatal("snapshot leaked a credential")
+	}
+}
+
+func TestManagerSelectsOnlyConnectedChatGPTAccount(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	cfg := testConfig(settingsPath)
+	service := app.NewService(app.Options{Model: cfg.OpenAI.Model}, stubProvider{}, nil)
+	manager, err := NewManager(&cfg, service, stubChatGPTCredentials{connected: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.Update(Update{
+		Provider: config.ProviderOpenAI, AuthMode: config.OpenAIAuthModeChatGPT,
+		Model: "gpt-5.6-terra", MaxOutputTokens: 4096, TimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	snapshot := manager.Snapshot().OpenAI
+	if snapshot.AuthMode != config.OpenAIAuthModeChatGPT || !snapshot.ChatGPTConnected || snapshot.CredentialSource != "ChatGPT account" || snapshot.EndpointKind != "ChatGPT Codex Responses" {
+		t.Fatalf("ChatGPT snapshot = %#v", snapshot)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"auth_mode": "chatgpt"`) || strings.Contains(string(data), "access") {
+		t.Fatalf("runtime settings = %s", data)
+	}
+
+	disconnected, err := NewManager(&cfg, service, stubChatGPTCredentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = disconnected.Update(Update{
+		Provider: config.ProviderOpenAI, AuthMode: config.OpenAIAuthModeChatGPT,
+		Model: "gpt-5.6-terra", MaxOutputTokens: 4096, TimeoutSeconds: 5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("disconnected Update() error = %v", err)
 	}
 }
 

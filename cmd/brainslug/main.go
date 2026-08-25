@@ -19,6 +19,7 @@ import (
 	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
 	"github.com/wellivea1/alexa-brainslug/internal/inference"
+	"github.com/wellivea1/alexa-brainslug/internal/openauth"
 	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
@@ -88,7 +89,19 @@ func run() error {
 		}
 	}()
 
-	provider, err := providers.NewConfigured(&cfg, nil)
+	openAIAuth, err := openauth.New(cfg.OpenAI.ChatGPTAuthFile, nil)
+	if err != nil {
+		return fmt.Errorf("configure OpenAI account authentication: %w", err)
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := openAIAuth.Close(closeCtx); err != nil {
+			slog.Warn("close OpenAI callback listener", "error", err)
+		}
+	}()
+
+	provider, err := providers.NewConfigured(&cfg, nil, openAIAuth)
 	if err != nil {
 		return fmt.Errorf("configure provider: %w", err)
 	}
@@ -99,11 +112,10 @@ func run() error {
 		SaveHistory:     cfg.SaveHistory,
 		Secrets:         cfg.SecretValues(),
 	}, providers.AsAppProvider(provider), store.AsAppRepository(db))
-	providerManager, err := inference.NewManager(&cfg, application)
+	providerManager, err := inference.NewManager(&cfg, application, openAIAuth)
 	if err != nil {
 		return fmt.Errorf("configure inference manager: %w", err)
 	}
-
 	alexaHandler := alexa.NewHandler(alexa.Options{
 		Verification: alexa.VerificationConfig{
 			VerifyRequests: cfg.AlexaVerifyRequests,
@@ -127,7 +139,7 @@ func run() error {
 			name: "admin",
 			server: &http.Server{
 				Addr:              adminAddr,
-				Handler:           buildAdminHandler(&cfg, providerManager, db, startedAt),
+				Handler:           buildAdminHandler(&cfg, providerManager, db, startedAt, openAIAuth),
 				ReadHeaderTimeout: readHeaderTimeout,
 				ReadTimeout:       readTimeout,
 				WriteTimeout:      adminWriteTimeout,
@@ -190,9 +202,14 @@ func buildPublicHandler(publicBaseURL string, alexaHandler http.Handler) http.Ha
 
 // buildAdminHandler registers local administrative routes on the separate
 // listener. The caller controls binding; the default is host loopback.
-func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time) http.Handler {
+func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time, authentication ...web.OpenAIAuthController) http.Handler {
+	var openAIAuth web.OpenAIAuthController
+	if len(authentication) > 0 {
+		openAIAuth = authentication[0]
+	}
 	dashboard := web.NewDashboard(db, web.Options{
 		Inference:               controller,
+		OpenAIAuth:              openAIAuth,
 		StartedAt:               startedAt,
 		AlexaVerifyRequests:     cfg.AlexaVerifyRequests,
 		HistoryEnabled:          cfg.SaveHistory,
@@ -205,6 +222,10 @@ func buildAdminHandler(cfg *config.Config, controller web.InferenceController, d
 	mux.HandleFunc("GET /history", dashboard.HandleHistory)
 	mux.HandleFunc("GET /assets/dashboard.css", dashboard.HandleStyles)
 	mux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
+	mux.HandleFunc("POST /auth/openai/browser", dashboard.HandleOpenAIBrowserStart)
+	mux.HandleFunc("POST /auth/openai/device/start", dashboard.HandleOpenAIDeviceStart)
+	mux.HandleFunc("POST /auth/openai/device/poll", dashboard.HandleOpenAIDevicePoll)
+	mux.HandleFunc("POST /auth/openai/disconnect", dashboard.HandleOpenAIDisconnect)
 	mux.HandleFunc("GET /{$}", dashboard.HandleIndex)
 
 	return security.RequestLogger(

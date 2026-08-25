@@ -105,7 +105,8 @@ See [docs/architecture.md](docs/architecture.md).
 
 - Go 1.26 or newer.
 - Docker and Docker Compose for containerized use.
-- An API key for the selected provider.
+- An API key for the selected provider, or a ChatGPT Plus/Pro account for the
+  optional OpenCode-compatible OpenAI account connector.
 - A public HTTPS endpoint for Alexa testing.
 - A private or loopback path to the administrative listener.
 
@@ -126,6 +127,7 @@ Important defaults:
 SERVER_ADDR=127.0.0.1:8080
 ADMIN_SERVER_ADDR=127.0.0.1:8081
 AI_PROVIDER=openai
+OPENAI_AUTH_MODE=api_key
 OPENAI_MODEL=gpt-5.6-terra
 OPENAI_MAX_OUTPUT_TOKENS=25000
 OPENAI_TIMEOUT_SECONDS=6
@@ -170,6 +172,25 @@ OPENAI_MODEL=gpt-5.6-terra
 
 You may set `OPENAI_API_KEY_FILE` instead of `OPENAI_API_KEY`. The file should contain exactly one non-comment secret value.
 
+OpenAI has two deliberately separate credential paths:
+
+- `api_key` calls the documented [OpenAI API](https://developers.openai.com/api/reference/overview)
+  (or an explicitly
+  configured compatible endpoint) with `OPENAI_API_KEY` or
+  `OPENAI_API_KEY_FILE`.
+- `chatgpt` calls the account-scoped Codex Responses transport with a locally
+  connected ChatGPT Plus/Pro account. [OpenCode documents this account login](https://opencode.ai/docs/providers/#openai),
+  but it is not the standard OpenAI API-key contract and available models are
+  controlled by the account.
+
+To connect a ChatGPT account, open `http://127.0.0.1:8081/`, choose
+**Inference → OpenAI / compatible**, and use **Connect**. Browser login opens a
+short-lived callback on host loopback port `1455`; do not forward that port.
+Use **Use code** when running in Docker or when the browser callback cannot
+reach the Brainslug host. After sign-in, select **ChatGPT account**, choose an
+account-supported model, and save settings. Brainslug does not silently change
+the configured model.
+
 Anthropic example:
 
 ```text
@@ -205,11 +226,13 @@ timeout, reasoning effort, and text verbosity changes take effect immediately
 and persist in `brainslug.settings.json` beside the SQLite database by default.
 Set `RUNTIME_SETTINGS_PATH` to choose another location.
 
-The runtime settings file never contains API keys. Configure credentials with
-`OPENAI_API_KEY`, `OPENAI_API_KEY_FILE`, `ANTHROPIC_API_KEY`, or
-`ANTHROPIC_API_KEY_FILE` before selecting that provider in the dashboard.
-The local form reports only whether a credential exists and whether it came
-from the environment or a secret file.
+The runtime settings file never contains provider credentials. API keys still
+come from `OPENAI_API_KEY`, `OPENAI_API_KEY_FILE`, `ANTHROPIC_API_KEY`, or
+`ANTHROPIC_API_KEY_FILE`. A connected ChatGPT account is stored separately in
+`brainslug.openai-auth.json` beside SQLite by default, or at
+`OPENAI_CHATGPT_AUTH_FILE`. That file contains refreshable bearer credentials;
+keep it private and never commit or copy it casually. The dashboard exposes
+only connection state and a generic credential source.
 
 The model manager keeps OpenAI-compatible and Anthropic configuration in one
 panel with a provider tab for each. Provider and model selection stay
@@ -224,9 +247,10 @@ See the [OpenAI model catalog](https://developers.openai.com/api/docs/models).
 
 The management UI uses a restrained, flat interpretation of Amazon's
 [Alexa color palette](https://developer.amazon.com/en-US/alexa/branding/alexa-guidelines/brand-guidelines/color)
-and the spacing, 8 dp corner, and contained/outlined action conventions in the
-[Alexa Design System](https://developer.amazon.com/en-US/docs/alexa/alexa-presentation-language/apl-alexa-packages-overview.html).
-It does not use or reproduce Amazon's protected Alexa logo.
+and applies a compact panel/row hierarchy based on the NoobBoard UI standards:
+one raised workspace, strong section bands, soft peer-row dividers, aligned
+controls, and 44 px mobile targets. It does not use or reproduce Amazon's
+protected Alexa logo.
 
 The ASK listener at port 8080 intentionally has no health, history, or dashboard route.
 

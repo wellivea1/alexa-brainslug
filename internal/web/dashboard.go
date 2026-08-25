@@ -18,7 +18,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wellivea1/alexa-brainslug/internal/config"
 	"github.com/wellivea1/alexa-brainslug/internal/inference"
+	"github.com/wellivea1/alexa-brainslug/internal/openauth"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
 )
 
@@ -51,9 +53,23 @@ type InferenceController interface {
 	Update(inference.Update) error
 }
 
+type openAIAuthModeController interface{ SetOpenAIAuthMode(string) error }
+
+// OpenAIAuthController is the secret-free dashboard boundary around ChatGPT
+// login. Tokens never enter form values, query strings, or page data.
+type OpenAIAuthController interface {
+	Snapshot() openauth.Snapshot
+	StartBrowser(returnURL string) (string, error)
+	StartDevice(context.Context) (openauth.DeviceFlow, error)
+	Device(id string) (openauth.DeviceFlow, bool)
+	PollDevice(context.Context, string) (openauth.PollResult, error)
+	Clear() error
+}
+
 // Options describes fixed process state and optional test seams.
 type Options struct {
 	Inference               InferenceController
+	OpenAIAuth              OpenAIAuthController
 	StartedAt               time.Time
 	AlexaVerifyRequests     bool
 	HistoryEnabled          bool
@@ -66,6 +82,7 @@ type Options struct {
 type Dashboard struct {
 	store                   Store
 	inference               InferenceController
+	openAIAuth              OpenAIAuthController
 	startedAt               time.Time
 	alexaVerifyRequests     bool
 	historyEnabled          bool
@@ -91,6 +108,7 @@ func NewDashboard(history Store, configured ...Options) *Dashboard {
 	return &Dashboard{
 		store:                   history,
 		inference:               options.Inference,
+		openAIAuth:              options.OpenAIAuth,
 		startedAt:               options.StartedAt,
 		alexaVerifyRequests:     options.AlexaVerifyRequests,
 		historyEnabled:          options.HistoryEnabled,
@@ -144,6 +162,7 @@ func (d *Dashboard) HandleProviderUpdate(w http.ResponseWriter, r *http.Request)
 
 	err = d.inference.Update(inference.Update{
 		Provider:        r.PostFormValue("provider"),
+		AuthMode:        r.PostFormValue("auth_mode"),
 		Model:           r.PostFormValue("model"),
 		BaseURL:         r.PostFormValue("base_url"),
 		MaxOutputTokens: maxOutputTokens,
@@ -156,6 +175,91 @@ func (d *Dashboard) HandleProviderUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	http.Redirect(w, r, "/?section=inference&provider="+url.QueryEscape(r.PostFormValue("provider"))+"&saved=1", http.StatusSeeOther)
+}
+
+// HandleOpenAIBrowserStart leaves the local dashboard for the PKCE login and
+// returns through the short-lived localhost callback listener.
+func (d *Dashboard) HandleOpenAIBrowserStart(w http.ResponseWriter, r *http.Request) {
+	if !d.authorizeMutation(w, r) {
+		return
+	}
+	if d.openAIAuth == nil {
+		http.Error(w, "OpenAI account login is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	returnURL := "http://" + r.Host + "/?section=inference&provider=openai"
+	authURL, err := d.openAIAuth.StartBrowser(returnURL)
+	if err != nil {
+		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
+		return
+	}
+	authTarget, err := url.Parse(authURL)
+	if err != nil || authTarget.Scheme != "https" || !strings.EqualFold(authTarget.Hostname(), "auth.openai.com") {
+		d.renderIndex(w, r, http.StatusBadGateway, "OpenAI login returned an invalid authorization URL.")
+		return
+	}
+	http.Redirect(w, r, authTarget.String(), http.StatusSeeOther) //nolint:gosec // G710: exact HTTPS issuer validated above.
+}
+
+// HandleOpenAIDeviceStart begins the fallback code flow.
+func (d *Dashboard) HandleOpenAIDeviceStart(w http.ResponseWriter, r *http.Request) {
+	if !d.authorizeMutation(w, r) {
+		return
+	}
+	if d.openAIAuth == nil {
+		http.Error(w, "OpenAI account login is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	flow, err := d.openAIAuth.StartDevice(r.Context())
+	if err != nil {
+		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/?section=inference&provider=openai&device="+url.QueryEscape(flow.ID), http.StatusSeeOther)
+}
+
+// HandleOpenAIDevicePoll completes a code flow after the user signs in.
+func (d *Dashboard) HandleOpenAIDevicePoll(w http.ResponseWriter, r *http.Request) {
+	if !d.authorizeMutation(w, r) {
+		return
+	}
+	if d.openAIAuth == nil {
+		http.Error(w, "OpenAI account login is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	id := strings.TrimSpace(r.PostFormValue("device_id"))
+	result, err := d.openAIAuth.PollDevice(r.Context(), id)
+	if err != nil {
+		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
+		return
+	}
+	if result == openauth.PollPending {
+		http.Redirect(w, r, "/?section=inference&provider=openai&device="+url.QueryEscape(id)+"&pending=1", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/?section=inference&provider=openai&auth=connected", http.StatusSeeOther)
+}
+
+// HandleOpenAIDisconnect returns OpenAI to API-key mode before removing the
+// local account credential.
+func (d *Dashboard) HandleOpenAIDisconnect(w http.ResponseWriter, r *http.Request) {
+	if !d.authorizeMutation(w, r) {
+		return
+	}
+	modeController, ok := d.inference.(openAIAuthModeController)
+	if d.openAIAuth == nil || !ok {
+		http.Error(w, "OpenAI account login is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := modeController.SetOpenAIAuthMode(config.OpenAIAuthModeAPIKey); err != nil {
+		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
+		return
+	}
+	if err := d.openAIAuth.Clear(); err != nil {
+		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/?section=inference&provider=openai&auth=disconnected", http.StatusSeeOther)
 }
 
 // HandleHistory serves bounded recent interactions as JSON.
@@ -200,6 +304,8 @@ type pageData struct {
 	ProviderFilter       string
 	ProviderTab          string
 	OpenAIModels         []modelOption
+	OpenAIAuth           openauth.Snapshot
+	DeviceAuth           *openauth.DeviceFlow
 }
 
 type systemView struct {
@@ -257,6 +363,14 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 		activeProvider = inferenceSnapshot.Anthropic
 	}
 	providerTab := normalizedProviderTab(firstNonEmpty(r.FormValue("provider"), r.URL.Query().Get("provider")), inferenceSnapshot.ActiveProvider)
+	var openAIAuthSnapshot openauth.Snapshot
+	var deviceAuth *openauth.DeviceFlow
+	if d.openAIAuth != nil {
+		openAIAuthSnapshot = d.openAIAuth.Snapshot()
+		if flow, ok := d.openAIAuth.Device(r.URL.Query().Get("device")); ok {
+			deviceAuth = &flow
+		}
+	}
 	system := d.systemView(activeProvider)
 	pageTitle, pageDescription := sectionCopy(section)
 	overview := interactions
@@ -282,9 +396,26 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 		ProviderFilter:       providerFilter,
 		ProviderTab:          providerTab,
 		OpenAIModels:         openAIModels,
+		OpenAIAuth:           openAIAuthSnapshot,
+		DeviceAuth:           deviceAuth,
 	}
 	if r.URL.Query().Get("saved") == "1" {
 		data.Notice = "Inference settings saved and activated."
+	}
+	switch r.URL.Query().Get("auth") {
+	case "connected":
+		if inferenceSnapshot.OpenAI.AuthMode == config.OpenAIAuthModeChatGPT {
+			data.Notice = "ChatGPT account reconnected."
+		} else {
+			data.Notice = "ChatGPT account connected. Select it below and save settings to activate it."
+		}
+	case "disconnected":
+		data.Notice = "ChatGPT account disconnected. OpenAI returned to API-key mode."
+	case "error":
+		data.FormError = "ChatGPT account login did not complete. Try again or use the code login."
+	}
+	if r.URL.Query().Get("pending") == "1" {
+		data.Notice = "Still waiting for OpenAI sign-in. Complete it, then check again."
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -428,6 +559,22 @@ func sameOrigin(r *http.Request) error {
 		return errors.New("cross-origin dashboard update rejected")
 	}
 	return nil
+}
+
+func (d *Dashboard) authorizeMutation(w http.ResponseWriter, r *http.Request) bool {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "dashboard form could not be read", http.StatusBadRequest)
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(r.PostFormValue("csrf_token")), []byte(d.csrfToken)) != 1 {
+		http.Error(w, "invalid dashboard form token", http.StatusForbidden)
+		return false
+	}
+	if err := sameOrigin(r); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func newCSRFToken() string {

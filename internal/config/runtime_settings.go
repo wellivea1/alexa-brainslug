@@ -34,6 +34,7 @@ type ProviderRuntimeSettings struct {
 // API controls supported by the GPT-5.6 model family.
 type OpenAIRuntimeSettings struct {
 	ProviderRuntimeSettings
+	AuthMode        string `json:"auth_mode,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	TextVerbosity   string `json:"text_verbosity"`
 }
@@ -50,6 +51,7 @@ func RuntimeSettingsFromConfig(cfg *Config) RuntimeSettings {
 				MaxOutputTokens: cfg.OpenAI.MaxOutputTokens,
 				TimeoutSeconds:  durationSeconds(cfg.OpenAI.Timeout),
 			},
+			AuthMode:        cfg.OpenAI.AuthMode,
 			ReasoningEffort: cfg.OpenAI.ReasoningEffort,
 			TextVerbosity:   cfg.OpenAI.TextVerbosity,
 		},
@@ -116,6 +118,9 @@ func (c *Config) applyRuntimeSettings(settings RuntimeSettings) {
 		c.Provider = provider
 	}
 	applyProviderRuntime(&c.OpenAI.Model, &c.OpenAI.BaseURL, &c.OpenAI.MaxOutputTokens, &c.OpenAI.Timeout, settings.OpenAI.ProviderRuntimeSettings)
+	if authMode := strings.ToLower(strings.TrimSpace(settings.OpenAI.AuthMode)); authMode != "" {
+		c.OpenAI.AuthMode = authMode
+	}
 	// Empty values intentionally restore the provider's own defaults. This is
 	// especially important for OpenAI-compatible servers that do not implement
 	// OpenAI's reasoning or text-verbosity request extensions.
@@ -149,6 +154,22 @@ func resolveRuntimeSettingsPath(configured, sqlitePath string) string {
 	extension := filepath.Ext(sqlitePath)
 	base := strings.TrimSuffix(sqlitePath, extension)
 	return base + ".settings.json"
+}
+
+func resolveOpenAIAuthPath(configured, sqlitePath string) string {
+	if path := strings.TrimSpace(configured); path != "" {
+		return path
+	}
+	databasePath := strings.TrimSpace(sqlitePath)
+	if databasePath == "" || databasePath == ":memory:" || strings.HasPrefix(databasePath, "file:") {
+		return ""
+	}
+	extension := filepath.Ext(databasePath)
+	base := strings.TrimSuffix(databasePath, extension)
+	if base == "" {
+		base = databasePath
+	}
+	return base + ".openai-auth.json"
 }
 
 func durationSeconds(value time.Duration) int {

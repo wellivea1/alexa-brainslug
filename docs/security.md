@@ -113,6 +113,10 @@ ADMIN_SERVER_ADDR
   GET /assets/dashboard.css
   GET /
   POST /settings/provider
+  POST /auth/openai/browser
+  POST /auth/openai/device/start
+  POST /auth/openai/device/poll
+  POST /auth/openai/disconnect
 ```
 
 Default host addresses:
@@ -166,6 +170,7 @@ OPENAI_API_KEY
 OPENAI_API_KEY_FILE
 ANTHROPIC_API_KEY
 ANTHROPIC_API_KEY_FILE
+OPENAI_CHATGPT_AUTH_FILE
 ```
 
 Requirements:
@@ -176,13 +181,34 @@ Requirements:
 - redact provider diagnostics before persistence or logs;
 - rotate a key after suspected exposure and inspect provider usage.
 
+`OPENAI_CHATGPT_AUTH_FILE` is different from the API-key file variables. It is
+a JSON credential store written by the local account login and contains an
+access token, refresh token, account identifier, and expiry. It defaults to
+`brainslug.openai-auth.json` beside SQLite, is created with owner-only file
+permissions where the platform supports them, and is ignored by Git. Treat a
+copy as an active account credential. **Disconnect** removes the local file;
+account-side revocation remains the recovery step after suspected exposure.
+
+Browser account login uses PKCE, a cryptographically random state value, a
+five-minute pending-flow lifetime, and a callback bound to `localhost:1455`.
+The callback accepts only the matching pending state and never belongs on a
+public proxy. The code login uses the OpenAI device page and retains only
+short-lived pending identifiers until the token exchange completes. All admin
+login and disconnect mutations require the same per-process CSRF token and
+same-origin check as provider-setting changes.
+
+The ChatGPT account connector is an OpenCode-compatible integration, not the
+documented OpenAI API authentication contract. It uses the account-scoped
+Codex Responses transport and its model availability may change with account
+tier or service behavior. API-key mode remains the supported OpenAI API path.
+
 The administrative health response reports provider and model names but no credentials.
 
-The dashboard persists provider, model, base URL, token limit, timeout,
-reasoning effort, and text verbosity in the non-secret runtime settings file.
+The dashboard persists provider, authentication mode, model, base URL, token
+limit, timeout, reasoning effort, and text verbosity in the non-secret runtime settings file.
 That schema deliberately has no credential field. The dashboard exposes only
-a boolean credential status and the generic source category `Environment`,
-`Secret file`, or `Not configured`.
+a boolean credential status and a generic source category such as
+`Environment`, `Secret file`, `ChatGPT account`, or `Not configured`.
 
 ## Provider And Model Policy
 

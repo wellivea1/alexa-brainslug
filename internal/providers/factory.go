@@ -17,12 +17,19 @@ const spokenWordLimit = 120
 //
 // Passing a nil client lets each provider build its own with the configured
 // timeout; tests pass a client pointed at a local test server.
-func NewConfigured(cfg *config.Config, client *http.Client) (Provider, error) {
+func NewConfigured(cfg *config.Config, client *http.Client, chatGPT ...ChatGPTCredentialSource) (Provider, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: configuration is required", ErrNotConfigured)
 	}
 	switch cfg.Provider {
 	case config.ProviderOpenAI:
+		if cfg.OpenAI.AuthMode == config.OpenAIAuthModeChatGPT {
+			var credentials ChatGPTCredentialSource
+			if len(chatGPT) > 0 {
+				credentials = chatGPT[0]
+			}
+			return NewChatGPT(cfg.OpenAI, credentials, client), nil
+		}
 		return NewOpenAI(cfg.OpenAI, client), nil
 	case config.ProviderAnthropic:
 		return NewAnthropic(cfg.Anthropic, client), nil

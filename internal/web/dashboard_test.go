@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/inference"
+	"github.com/wellivea1/alexa-brainslug/internal/openauth"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
 )
 
@@ -24,6 +25,7 @@ type fakeStore struct {
 type fakeInferenceController struct {
 	snapshot inference.Snapshot
 	update   inference.Update
+	authMode string
 	err      error
 }
 
@@ -32,6 +34,39 @@ func (f *fakeInferenceController) Update(update inference.Update) error {
 	f.update = update
 	return f.err
 }
+
+func (f *fakeInferenceController) SetOpenAIAuthMode(mode string) error {
+	f.authMode = mode
+	return f.err
+}
+
+type fakeOpenAIAuthController struct {
+	snapshot  openauth.Snapshot
+	returnURL string
+	flow      openauth.DeviceFlow
+	polledID  string
+	cleared   bool
+}
+
+func (f *fakeOpenAIAuthController) Snapshot() openauth.Snapshot { return f.snapshot }
+func (f *fakeOpenAIAuthController) StartBrowser(returnURL string) (string, error) {
+	f.returnURL = returnURL
+	return "https://auth.openai.com/oauth/authorize?test=1", nil
+}
+
+func (f *fakeOpenAIAuthController) StartDevice(context.Context) (openauth.DeviceFlow, error) {
+	return f.flow, nil
+}
+
+func (f *fakeOpenAIAuthController) Device(id string) (openauth.DeviceFlow, bool) {
+	return f.flow, id != "" && id == f.flow.ID
+}
+
+func (f *fakeOpenAIAuthController) PollDevice(_ context.Context, id string) (openauth.PollResult, error) {
+	f.polledID = id
+	return openauth.PollConnected, nil
+}
+func (f *fakeOpenAIAuthController) Clear() error { f.cleared = true; return nil }
 
 func (s *fakeStore) ListRecent(_ context.Context, limit int) ([]store.Interaction, error) {
 	s.gotLimit = limit
@@ -244,7 +279,7 @@ func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
 	form := url.Values{
 		"csrf_token": {"test-token"}, "provider": {"openai"}, "model": {"gpt-5.6-luna"},
 		"base_url": {""}, "max_output_tokens": {"4096"}, "timeout_seconds": {"4"},
-		"reasoning_effort": {"none"}, "text_verbosity": {"low"},
+		"auth_mode": {"api_key"}, "reasoning_effort": {"none"}, "text_verbosity": {"low"},
 	}
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/settings/provider", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -259,7 +294,7 @@ func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
 	if got := rec.Header().Get("Location"); got != "/?section=inference&provider=openai&saved=1" {
 		t.Fatalf("redirect = %q", got)
 	}
-	if controller.update.Model != "gpt-5.6-luna" || controller.update.ReasoningEffort != "none" || controller.update.TimeoutSeconds != 4 {
+	if controller.update.Model != "gpt-5.6-luna" || controller.update.AuthMode != "api_key" || controller.update.ReasoningEffort != "none" || controller.update.TimeoutSeconds != 4 {
 		t.Fatalf("update = %#v", controller.update)
 	}
 
@@ -269,6 +304,67 @@ func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
 	dashboard.HandleProviderUpdate(badRec, bad)
 	if badRec.Code != http.StatusForbidden {
 		t.Fatalf("missing CSRF status = %d", badRec.Code)
+	}
+}
+
+func TestOpenAIAccountControlsRenderAndMutationsRequireCSRF(t *testing.T) {
+	controller := &fakeInferenceController{snapshot: inference.Snapshot{
+		ActiveProvider: "openai",
+		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI / compatible", Active: true, Model: "gpt-test", AuthMode: "chatgpt", ChatGPTConnected: true, CredentialConfigured: true},
+	}}
+	authentication := &fakeOpenAIAuthController{snapshot: openauth.Snapshot{Connected: true}}
+	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, OpenAIAuth: authentication, CSRFToken: "test-token"})
+	rec := httptest.NewRecorder()
+	dashboard.HandleIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?section=inference&provider=openai", http.NoBody))
+	body := rec.Body.String()
+	for _, want := range []string{"ChatGPT account", "Reconnect", "Use code", "Disconnect", `value="chatgpt" checked`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("account UI is missing %q", want)
+		}
+	}
+
+	form := url.Values{"csrf_token": {"test-token"}}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/browser", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://127.0.0.1:8081")
+	req.Host = "127.0.0.1:8081"
+	rec = httptest.NewRecorder()
+	dashboard.HandleOpenAIBrowserStart(rec, req)
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "https://auth.openai.com/") {
+		t.Fatalf("browser login response = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if authentication.returnURL != "http://127.0.0.1:8081/?section=inference&provider=openai" {
+		t.Fatalf("return URL = %q", authentication.returnURL)
+	}
+
+	bad := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/browser", http.NoBody)
+	badRec := httptest.NewRecorder()
+	dashboard.HandleOpenAIBrowserStart(badRec, bad)
+	if badRec.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status = %d", badRec.Code)
+	}
+}
+
+func TestOpenAIDeviceDialogAndDisconnect(t *testing.T) {
+	controller := &fakeInferenceController{}
+	authentication := &fakeOpenAIAuthController{
+		snapshot: openauth.Snapshot{Connected: true},
+		flow:     openauth.DeviceFlow{ID: "flow-1", UserCode: "ABCD-EFGH", VerificationURL: "https://auth.openai.com/codex/device", PollIntervalSeconds: 5},
+	}
+	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, OpenAIAuth: authentication, CSRFToken: "test-token"})
+	rec := httptest.NewRecorder()
+	dashboard.HandleIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?section=inference&provider=openai&device=flow-1", http.NoBody))
+	if !strings.Contains(rec.Body.String(), "ABCD-EFGH") || !strings.Contains(rec.Body.String(), `role="dialog"`) {
+		t.Fatal("device login dialog was not rendered")
+	}
+
+	form := url.Values{"csrf_token": {"test-token"}}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/disconnect", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	dashboard.HandleOpenAIDisconnect(rec, req)
+	if rec.Code != http.StatusSeeOther || !authentication.cleared || controller.authMode != "api_key" {
+		t.Fatalf("disconnect = status %d, cleared %v, mode %q", rec.Code, authentication.cleared, controller.authMode)
 	}
 }
 
