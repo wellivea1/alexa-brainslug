@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/wellivea1/alexa-brainslug/internal/app"
 )
@@ -25,7 +26,7 @@ func (p *appProvider) Name() string {
 
 func (p *appProvider) Ask(ctx context.Context, req app.ProviderRequest) (app.ProviderResponse, error) {
 	response, err := p.provider.Ask(ctx, Request{
-		UserID:          req.Principal.Subject,
+		UserID:          providerPrincipalKey(req.Principal),
 		Prompt:          req.Prompt,
 		Model:           req.Model,
 		MaxOutputTokens: req.MaxOutputTokens,
@@ -41,6 +42,12 @@ func (p *appProvider) Ask(ctx context.Context, req app.ProviderRequest) (app.Pro
 		Model:       response.Model,
 		Latency:     response.Latency,
 	}, nil
+}
+
+// providerPrincipalKey gives provider-side user hashing a cross-platform input.
+// Existing provider clients hash this value before placing it on the wire.
+func providerPrincipalKey(principal app.Principal) string {
+	return strings.TrimSpace(principal.Namespace) + ":" + strings.TrimSpace(principal.Subject)
 }
 
 func mapAppError(err error) error {
