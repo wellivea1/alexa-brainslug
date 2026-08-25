@@ -68,13 +68,16 @@ type Options struct {
 
 // Handler serves POST /alexa.
 type Handler struct {
-	opts        Options
 	application ApplicationService
+	verifier    *RequestVerifier
 }
 
 // NewHandler builds the Alexa endpoint handler.
 func NewHandler(opts Options, application ApplicationService) *Handler {
-	return &Handler{opts: opts, application: application}
+	return &Handler{
+		application: application,
+		verifier:    NewRequestVerifier(opts.Verification),
+	}
 }
 
 // ServeHTTP implements http.Handler.
@@ -98,7 +101,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := VerifyRequest(r, body, &envelope, h.opts.Verification); err != nil {
+	if err := h.verifier.Verify(r, body, &envelope); err != nil {
 		// Amazon specifies 400 for a request that fails verification. The
 		// reason is logged locally and never returned: an attacker probing
 		// the endpoint learns nothing about which check failed.
