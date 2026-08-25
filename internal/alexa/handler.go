@@ -51,8 +51,8 @@ const (
 	speechProviderNoText    = "The AI provider ran out of room before it answered. The response limit may be too low."
 )
 
-// Application is the platform-neutral behavior the ASK adapter needs.
-type Application interface {
+// ApplicationService is the platform-neutral behavior the ASK adapter needs.
+type ApplicationService interface {
 	Ask(ctx context.Context, req app.AskRequest) (app.Answer, error)
 	LatestAnswer(ctx context.Context, principal app.Principal) (app.Answer, error)
 }
@@ -66,11 +66,11 @@ type Options struct {
 // Handler serves POST /alexa.
 type Handler struct {
 	opts        Options
-	application Application
+	application ApplicationService
 }
 
 // NewHandler builds the Alexa endpoint handler.
-func NewHandler(opts Options, application Application) *Handler {
+func NewHandler(opts Options, application ApplicationService) *Handler {
 	return &Handler{opts: opts, application: application}
 }
 
