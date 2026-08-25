@@ -27,7 +27,7 @@ const alexaPrincipalNamespace = "alexa"
 // Spoken responses. They are constants because every one of them is user
 // experience: each is heard aloud, with no screen to fall back on.
 const (
-	speechReady        = "Brainslug is ready. What should I ask?"
+	speechReady        = "Brainslug is ready."
 	speechRepromptAsk  = "What should I ask?"
 	speechRepromptHelp = "Try asking Brain Slug a question."
 	speechGoodbye      = "Goodbye."
@@ -114,7 +114,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Route(ctx context.Context, envelope *RequestEnvelope) ResponseEnvelope {
 	switch envelope.Request.Type {
 	case requestTypeLaunch:
-		return NewAsk(speechReady, speechRepromptAsk)
+		return NewDelegate(speechReady, IntentAskGPT, slotQuery)
 	case requestTypeIntent:
 		return h.handleIntent(ctx, envelope)
 	case requestTypeSessionEnded:
