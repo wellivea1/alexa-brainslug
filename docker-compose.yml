@@ -5,9 +5,15 @@ services:
     env_file:
       - .env
 
-    # Both listeners are bound to host loopback. Caddy or Cloudflare Tunnel may
-    # route only port 8080 and /alexa publicly. Port 8081 is the local dashboard,
-    # history feed, and health endpoint and must remain private.
+    # The .env file uses host-safe loopback addresses for local `go run`.
+    # Containers need to listen on all container interfaces so Docker can
+    # publish the ports; the host-side bindings below remain loopback-only.
+    environment:
+      SERVER_ADDR: ":8080"
+      ADMIN_SERVER_ADDR: ":8081"
+
+    # Caddy or Cloudflare Tunnel may route only port 8080 and /alexa publicly.
+    # Port 8081 is the local dashboard, history feed, and health endpoint.
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:8081:8081"
