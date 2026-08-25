@@ -1,6 +1,31 @@
 # Local Deployment
 
-Brainslug runs locally, but the ASK endpoint must be reachable from Amazon's cloud over public HTTPS.
+Brainslug runs locally, but Alexa must reach the ASK listener over public HTTPS. The administrative listener remains on loopback.
+
+## Current Topology
+
+```text
+Amazon Alexa cloud
+  -> https://brain-slug.example.com/alexa
+  -> reverse proxy or Cloudflare Tunnel
+  -> host 127.0.0.1:8080
+  -> container :8080
+  -> POST /alexa only
+
+operator browser or local tooling
+  -> host 127.0.0.1:8081
+  -> container :8081
+  -> /health, /history, /
+```
+
+Default host-side configuration:
+
+```text
+SERVER_ADDR=127.0.0.1:8080
+ADMIN_SERVER_ADDR=127.0.0.1:8081
+```
+
+The two listeners are structurally separate. The public listener has no dashboard, history, or health route.
 
 A LAN-only address such as:
 
@@ -8,38 +33,7 @@ A LAN-only address such as:
 http://192.168.1.10:8080/alexa
 ```
 
-will not work as an Alexa skill endpoint.
-
-## Current Topology
-
-The current process serves all routes on one listener:
-
-```text
-127.0.0.1:8080
-  /alexa
-  /health
-  /history
-  /
-```
-
-Only `/alexa` is intended for a public reverse proxy. The dashboard, history, and health routes are administrative and unauthenticated.
-
-Target topology after the listener split:
-
-```text
-public ASK listener
-  /alexa only
-
-loopback administrative listener
-  /health
-  /history
-  /
-
-future optional MCP listener
-  separate authentication and route
-```
-
-Until the split is implemented, public route isolation depends on the reverse proxy configuration.
+is not a valid Alexa endpoint because Alexa requests originate in Amazon's cloud.
 
 ## Docker Compose
 
@@ -57,23 +51,48 @@ Check logs:
 docker compose logs -f brainslug
 ```
 
-The provided compose file binds the service to `127.0.0.1:8080` on the host and persists SQLite data under `./data`.
+The provided compose file overrides the in-container addresses:
 
-Leave `SQLITE_PATH` unset in `.env` for the provided container deployment. The image already sets the database path to the mounted volume. Overriding it with a relative host-oriented path can point the container at an unwritable or unmounted location.
-
-Verify local health:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8080/health
+```text
+SERVER_ADDR=:8080
+ADMIN_SERVER_ADDR=:8081
 ```
 
-Expected fields include the configured provider and model but no credentials.
+and maps both ports back to host loopback:
+
+```text
+127.0.0.1:8080:8080
+127.0.0.1:8081:8081
+```
+
+SQLite data is stored under `./data`.
+
+Leave `SQLITE_PATH` unset in `.env` for the provided container deployment. The image already points it at `/data/brainslug.db`. A host-oriented relative override can send the container to an unwritable or unmounted path.
+
+Administrative health:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8081/health
+```
+
+Dashboard and history:
+
+```text
+http://127.0.0.1:8081/
+http://127.0.0.1:8081/history
+```
+
+The public port should return 404 for those paths:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8080/ -SkipHttpErrorCheck
+Invoke-WebRequest http://127.0.0.1:8080/history -SkipHttpErrorCheck
+Invoke-WebRequest http://127.0.0.1:8080/health -SkipHttpErrorCheck
+```
 
 ## Caddy Reverse Proxy
 
-Use `Caddyfile.example` as the baseline.
-
-Required behavior:
+Use `Caddyfile.example` as the baseline:
 
 ```text
 brain-slug.example.com {
@@ -87,26 +106,20 @@ brain-slug.example.com {
 }
 ```
 
-Do not replace this with:
+A broad reverse proxy to port 8080 no longer reaches administrative routes, but the path-scoped rule still reduces the exposed surface and documents intent.
 
-```text
-reverse_proxy 127.0.0.1:8080
-```
-
-A whole-origin proxy publishes the dashboard and every stored prompt and answer available through `/history`.
+Do not route port 8081 publicly.
 
 Requirements for direct Caddy exposure:
 
-- Public DNS points to the server or router.
-- TCP 443 reaches the Caddy host.
-- Firewall rules permit only the required traffic.
-- TLS certificate issuance succeeds.
-
-Caddy handles normal public certificates automatically when DNS and inbound connectivity are correct.
+- public DNS points to the server or router;
+- TCP 443 reaches the Caddy host;
+- firewall rules permit the required traffic;
+- certificate issuance succeeds.
 
 ## Cloudflare Tunnel
 
-Cloudflare Tunnel avoids opening an inbound port. Scope the ingress rule to the ASK path:
+A path-scoped ingress rule avoids opening an inbound port:
 
 ```yaml
 ingress:
@@ -116,77 +129,53 @@ ingress:
   - service: http_status:404
 ```
 
-Do not map the hostname directly to the whole origin:
-
-```yaml
-service: http://127.0.0.1:8080
-```
-
-That publishes the dashboard and history feed.
-
-Use the HTTPS hostname in the Alexa Developer Console:
+Use this endpoint in the Alexa Developer Console:
 
 ```text
 https://brain-slug.example.com/alexa
 ```
 
+Do not add an ingress rule for port 8081.
+
+## ASK Verification
+
+For real Alexa requests:
+
+```text
+ALEXA_VERIFY_REQUESTS=true
+ALEXA_ALLOWED_SKILL_ID=<actual skill ID>
+```
+
+The verifier checks:
+
+- signing-certificate URL constraints;
+- certificate trust and Alexa signing name;
+- SHA-256 signature over the exact body;
+- timestamp freshness;
+- skill application ID.
+
+The verifier is unit-tested but has not yet been validated against a real Amazon-signed request in this environment. Use a controlled initial deployment and inspect failures locally.
+
+`ALEXA_VERIFY_REQUESTS=false` is only for local fixture tests with no public route. Do not use it as an operational mode.
+
 ## Public Route Verification
 
-After every proxy or tunnel change, test from outside the LAN where possible.
+After every proxy or tunnel change, test from outside the LAN where practical.
 
 Expected:
 
 ```text
-POST https://brain-slug.example.com/alexa   -> reaches ASK handler
+POST https://brain-slug.example.com/alexa   -> ASK handler
 GET  https://brain-slug.example.com/        -> 404
 GET  https://brain-slug.example.com/history -> 404
 GET  https://brain-slug.example.com/health  -> 404
 ```
 
-PowerShell examples:
-
-```powershell
-Invoke-WebRequest https://brain-slug.example.com/ -SkipHttpErrorCheck
-Invoke-WebRequest https://brain-slug.example.com/history -SkipHttpErrorCheck
-Invoke-WebRequest https://brain-slug.example.com/health -SkipHttpErrorCheck
-```
-
-All three administrative paths should return 404 from the public hostname.
-
-A 401 or login page from an unrelated edge product is also preferable to exposure, but the documented Brainslug proxy should return 404.
-
-## Request Verification State
-
-Current code has a fail-closed placeholder:
-
-```text
-ALEXA_VERIFY_REQUESTS=true
-```
-
-rejects all ASK requests.
-
-For a short-lived controlled round-trip only:
-
-```text
-ALEXA_VERIFY_REQUESTS=false
-ALEXA_ALLOWED_SKILL_ID=<actual skill ID>
-```
-
-This is not safe for continuous public operation. Anyone who reaches the route can potentially spend the configured provider key.
-
-Required order:
-
-1. Start the local service.
-2. Start the path-scoped public route.
-3. Run the real Echo test.
-4. Stop or remove the public route immediately.
-5. Re-enable fail-closed verification.
-
-After real request verification is implemented and tested, continuous ASK exposure becomes reasonable only with rate limiting and a spend cap.
+Also confirm that the administrative interface remains reachable only from the intended local host or private management path.
 
 ## NAT Loopback
 
-NAT loopback helps devices inside the home network reach a public hostname. It does not make a LAN-only service reachable from Amazon's cloud.
+NAT loopback helps devices inside the network reach a public hostname. It does not make a LAN-only service reachable from Amazon.
 
 The relevant path is:
 
@@ -197,32 +186,23 @@ Amazon Alexa cloud
   -> 127.0.0.1:8080/alexa
 ```
 
-## Target Listener Split
+## Security State
 
-The public/private split should be structural.
+The listener split and ASK verifier remove the two largest original exposure defects, but continuous operation still needs:
 
-Recommended configuration shape:
+- per-principal rate limits;
+- bounded provider concurrency;
+- a global request or spend cap;
+- real Amazon-signed request validation;
+- retention appropriate to the stored prompts and answers.
 
-```text
-ASK_LISTEN_ADDR=127.0.0.1:8080
-ADMIN_LISTEN_ADDR=127.0.0.1:8081
-```
-
-The exact variable names may differ, but the properties are fixed:
-
-- ASK listener registers only `/alexa`.
-- Administrative listener registers `/`, `/history`, and `/health`.
-- The administrative listener binds to loopback by default.
-- The public proxy cannot reach the administrative listener through a broad path rule.
-- Shutdown drains both listeners under a shared bounded lifecycle.
-
-Do not add authentication to the current shared listener and call the structural problem solved. Authentication may still be useful later, but listener separation removes an entire proxy-misconfiguration class.
+Until those exist, keep the deployment private and monitored rather than treating it as a public service.
 
 ## Future MCP Deployment
 
-No MCP route exists today and none should be added to the default proxy examples.
+No MCP route exists today.
 
-If an MCP adapter is later implemented, use separate ingress and authentication:
+A future authenticated MCP adapter must use separate ingress and authentication, for example:
 
 ```text
 brain-slug.example.com/alexa -> ASK signature verification
@@ -230,32 +210,28 @@ mcp.brain-slug.example.com/mcp -> MCP OAuth and service authentication
 127.0.0.1:8081 -> local administration
 ```
 
-Do not:
-
-- Reuse ASK signature middleware for MCP.
-- Put an unauthenticated `/mcp` route beside `/alexa`.
-- Assume a hidden hostname is authentication.
-- Route the local dashboard through an MCP host.
+Do not place an unauthenticated `/mcp` route beside `/alexa`, and do not reuse ASK verification settings for MCP.
 
 See `mcp-roadmap.md` and `security.md`.
 
-## Operational Checks
+## Operational Checklist
 
-Before a controlled ASK test:
+Before an Alexa test:
 
-- Provider and model are explicit in `/health`.
-- Provider key is loaded and absent from logs.
-- SQLite directory is writable and persistent.
-- Public hostname routes only `/alexa`.
-- `ALEXA_ALLOWED_SKILL_ID` is set.
-- Verification state is understood.
-- Rate limits exist before any continuous exposure.
+- [ ] Provider and model are explicit in administrative `/health`.
+- [ ] Provider key is loaded and absent from logs.
+- [ ] SQLite directory is writable and persistent.
+- [ ] Public hostname routes only `/alexa`.
+- [ ] Port 8081 is not public.
+- [ ] `ALEXA_ALLOWED_SKILL_ID` is set.
+- [ ] `ALEXA_VERIFY_REQUESTS=true`.
+- [ ] The interaction model builds in the Developer Console.
 
-After deployment changes:
+Before continuous use:
 
-- Restart the container.
-- Confirm `/health` locally.
-- Confirm history persistence.
-- Confirm public administrative routes return 404.
-- Inspect logs for provider or verification failures.
-- Confirm the public route was removed after any verification-disabled test.
+- [ ] Real signed requests pass the verifier.
+- [ ] Invalid and stale requests fail before provider use.
+- [ ] Rate limits exist.
+- [ ] Provider concurrency is bounded.
+- [ ] A global cap prevents uncontrolled spend.
+- [ ] Retention is configured.
