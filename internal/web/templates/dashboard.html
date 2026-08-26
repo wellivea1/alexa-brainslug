@@ -206,7 +206,7 @@
 
           <nav class="provider-tabs" aria-label="Inference providers" role="tablist">
             <a href="/?section=inference&amp;provider=openai" role="tab" aria-selected="{{if eq .ProviderTab "openai"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai"}}aria-current="page"{{end}}>OpenAI{{if .Inference.OpenAI.Active}}<span>Active</span>{{end}}</a>
-            <a href="/?section=inference&amp;provider=openai-compatible" role="tab" aria-selected="{{if eq .ProviderTab "openai-compatible"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai-compatible"}}aria-current="page"{{end}}>Compatible{{if .Inference.Compatible.Active}}<span>Active</span>{{end}}</a>
+            <a href="/?section=inference&amp;provider=openai-compatible" role="tab" aria-selected="{{if eq .ProviderTab "openai-compatible"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai-compatible"}}aria-current="page"{{end}}>OAI Compat.{{if .Inference.Compatible.Active}}<span>Active</span>{{end}}</a>
             <a href="/?section=inference&amp;provider=anthropic" role="tab" aria-selected="{{if eq .ProviderTab "anthropic"}}true{{else}}false{{end}}" {{if eq .ProviderTab "anthropic"}}aria-current="page"{{end}}>Anthropic{{if .Inference.Anthropic.Active}}<span>Active</span>{{end}}</a>
           </nav>
 

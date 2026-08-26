@@ -291,6 +291,9 @@ func TestHandleIndexUsesOneTabbedProviderPanel(t *testing.T) {
 			t.Errorf("provider manager is missing tab %q", tab)
 		}
 	}
+	if !strings.Contains(body, "OAI Compat.") {
+		t.Error("compatible provider tab does not use the compact OpenAI label")
+	}
 }
 
 func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
