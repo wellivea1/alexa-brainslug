@@ -74,9 +74,57 @@ listener design.
 
 Requirements:
 
-- Go 1.26 or newer.
+- Go 1.26 or newer for manual setup. The Windows installer can provision it.
 - An Alexa custom skill and a public HTTPS endpoint.
 - A credential for the selected provider, or an optional ChatGPT account.
+
+### Windows setup
+
+On a bare Windows machine, sign in to this private repository, choose
+**Code -> Download ZIP**, extract it, then run:
+
+```powershell
+Set-Location "path\to\alexa-brainslug-main"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Or, from a cloned checkout, run:
+
+```powershell
+.\install.ps1
+```
+
+An extracted ZIP does not require Git, `winget`, administrator rights, or a
+preinstalled Go toolchain. A copied standalone `install.ps1` can instead
+bootstrap to `%LOCALAPPDATA%\Brainslug`; private-repository access is read from
+the temporary `BRAINSLUG_GITHUB_TOKEN` environment variable and is never saved.
+When Go is missing, the installer offers a user-local copy verified against the
+SHA-256 published by go.dev. It runs the tests, builds `bin\brainslug.exe`,
+creates `.env` when needed, and asks whether Brainslug should start
+automatically when you sign in. The recommended startup option uses a per-user
+Scheduled Task with no stored password.
+
+For unattended setup:
+
+```powershell
+.\install.ps1 -NonInteractive -Startup Enable -InstallGo
+```
+
+Update an installed checkout with:
+
+```powershell
+.\update.ps1
+```
+
+The updater uses a clean fast-forward for Git checkouts or a hashed source
+manifest for standalone installs. Downloads are retried into staging files, so
+an interrupted transfer cannot replace the installed source or binary. It
+builds and tests before stopping the current process, keeps the previous binary
+for rollback, and preserves `.env`, SQLite, settings, and credentials. See
+[Windows install and updates](docs/windows-install.md) for startup rationale,
+options, logs, and recovery.
+
+### Manual setup
 
 Prepare the environment:
 
@@ -239,6 +287,7 @@ timeouts are not a substitute for a persisted deferred-job path.
 - [Alexa skill setup](docs/alexa-skill-setup.md)
 - [Invocation design](docs/invocation-design.md)
 - [Local deployment](docs/local-deployment.md)
+- [Windows install and updates](docs/windows-install.md)
 - [Security](docs/security.md)
 - [Project plan](docs/project-plan.md)
 - [Progress checks](docs/progress-checks.md)

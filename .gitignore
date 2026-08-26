@@ -7,7 +7,10 @@ brainslug.db-*
 *.settings.json
 *.auth.json
 .codex-verify/
+.tools/
+.brainslug-source.json
 data/
+logs/
 
 bin/
 dist/
