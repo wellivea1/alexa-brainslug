@@ -8,6 +8,7 @@ brainslug.db-*
 *.auth.json
 *.openai-auth.json
 *.provider-auth.json
+*.admin-auth.json
 .codex-verify/
 .tools/
 .brainslug-source.json

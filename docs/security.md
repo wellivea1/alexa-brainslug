@@ -44,6 +44,7 @@ Alexa device
 
 loopback operator
   -> administrative listener
+  -> first-run owner or authenticated session boundary
   -> dashboard, health, and history
 
 future MCP client
@@ -108,10 +109,15 @@ SERVER_ADDR
   POST /alexa only
 
 ADMIN_SERVER_ADDR
+  GET /healthz (minimal liveness; unauthenticated)
+  GET/POST /setup (first run only)
+  GET/POST /login
   GET /health
   GET /history
   GET /assets/dashboard.css
+  GET /assets/dashboard.js
   GET /
+  POST /logout
   POST /settings/provider
   POST /auth/openai/browser
   POST /auth/openai/device/start
@@ -128,15 +134,31 @@ ADMIN_SERVER_ADDR=127.0.0.1:8081
 
 Docker binds both back to host loopback. The reverse proxy or tunnel reaches port 8080 only.
 
-The administrative listener contains private prompts and answers and has no remote-user authentication. Do not publish port 8081. An explicit non-loopback `ADMIN_SERVER_ADDR` is permitted for container networking and must be protected by the deployment topology, such as Docker's host-loopback port mapping.
+The administrative listener contains private prompts, answers, and provider
+controls. First-run setup creates one local owner account; every detailed
+health, history, dashboard, and mutation route then requires an expiring
+server-side session. Do not publish port 8081. An explicit non-loopback
+`ADMIN_SERVER_ADDR` is permitted for container networking and must still be
+protected by the deployment topology, such as Docker's host-loopback mapping.
 
-Provider-setting changes use a per-process CSRF token and reject cross-origin
-browser submissions. These are defense-in-depth controls for a loopback-only
-surface, not remote-user authentication. A valid browser-reported HTTP
+`GET /healthz` is the only unauthenticated administrative diagnostic. It
+returns only service name and liveness. Detailed provider and model state
+remains at authenticated `GET /health`.
+
+Setup, login, logout, and provider-setting changes use a per-process CSRF token
+and reject cross-origin browser submissions. A valid browser-reported HTTP
 loopback origin is accepted when local port forwarding rewrites the backend
 Host header; non-loopback origins must still match the request origin exactly.
 The dashboard sends mutations with same-origin `fetch` and follows only local
 redirects or the validated `https://auth.openai.com` authorization target.
+
+Passwords are stored in `ADMIN_AUTH_FILE` as uniquely salted
+PBKDF2-HMAC-SHA256 hashes with 600,000 iterations. Browser sessions use random
+256-bit tokens, store only token digests in memory, expire after 30 minutes of
+inactivity or eight hours absolutely, and are invalidated by restart or
+logout. Cookies are `HttpOnly`, `SameSite=Strict`, and `Secure` when the
+browser-visible request is HTTPS. Login failures are throttled independently
+by username and source address.
 
 The public hostname should return 404 for:
 
@@ -178,6 +200,7 @@ ANTHROPIC_API_KEY
 ANTHROPIC_API_KEY_FILE
 PROVIDER_AUTH_FILE
 OPENAI_CHATGPT_AUTH_FILE
+ADMIN_AUTH_FILE
 ```
 
 Requirements:
@@ -195,6 +218,12 @@ permissions where the platform supports them, and is ignored by Git. Saved
 keys are never rendered back into HTML, URLs, health responses, or logs.
 Removing a saved key does not edit environment variables or mounted secret
 files.
+
+`ADMIN_AUTH_FILE` stores the single management owner name, password-derivation
+parameters, salt, and derived hash. It contains no plaintext password or
+session token and defaults to `brainslug.admin-auth.json` beside SQLite.
+Deleting it while Brainslug is stopped is the offline owner-reset procedure;
+the next local visit enters first-run setup again.
 
 `OPENAI_CHATGPT_AUTH_FILE` is different from the API-key file variables. It is
 a JSON credential store written by the local account login and contains an
@@ -377,12 +406,16 @@ If the public route or provider key may have been abused:
 
 If prompts or answers may have been exposed, treat it as a private-data incident as well as a billing incident.
 
+See `security-audit.md` for the management authentication audit, resolved
+findings, and residual operating requirements.
+
 ## Continuous-Use Exit Criteria
 
 - [x] Real Amazon-signed request passes verification.
 - [ ] Tampered, stale, foreign-skill, and invalid-certificate requests fail before application execution.
 - [ ] Public and administrative listeners remain isolated.
 - [ ] Port 8081 is not publicly routed.
+- [x] Management history and mutations require an expiring owner session.
 - [ ] Per-principal and global limits exist.
 - [ ] Provider concurrency is bounded.
 - [ ] Credentials and raw platform IDs are absent from logs.

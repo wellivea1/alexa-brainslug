@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{{.PageTitle}} · Brainslug</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=9">
-  <script src="/assets/dashboard.js?v=2" defer></script>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=10">
+  <script src="/assets/dashboard.js?v=3" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -54,12 +54,15 @@
           <h1>{{.PageTitle}}</h1>
           <p class="page-description">{{.PageDescription}}</p>
         </div>
-        <div class="topbar-status status-{{.System.Tone}}">
-          <span class="status-dot" aria-hidden="true"></span>
-          <div>
-            <strong>{{.System.Verdict}}</strong>
-            <span>Uptime {{.Uptime}}</span>
+        <div class="topbar-meta">
+          <div class="topbar-status status-{{.System.Tone}}">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+              <strong>{{.System.Verdict}}</strong>
+              <span>Uptime {{.Uptime}}</span>
+            </div>
           </div>
+          {{if .AdminUsername}}<div class="owner-session"><span><strong>{{.AdminUsername}}</strong><small>Owner</small></span><form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-quiet" type="submit">Sign out</button></form></div>{{end}}
         </div>
       </header>
 

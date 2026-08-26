@@ -714,23 +714,23 @@ function Get-BrainslugAdminHealthURI {
         }
     }
     if ($address -match "^:(?<port>[0-9]+)$") {
-        return "http://127.0.0.1:$($Matches['port'])/health"
+        return "http://127.0.0.1:$($Matches['port'])/healthz"
     }
     if ($address -match "^\[(?<host>[^]]+)\]:(?<port>[0-9]+)$") {
         $hostName = $Matches["host"]
         if ($hostName -eq "::" -or $hostName -eq "::0") {
             $hostName = "::1"
         }
-        return "http://[$hostName]:$($Matches['port'])/health"
+        return "http://[$hostName]:$($Matches['port'])/healthz"
     }
     if ($address -match "^(?<host>[^:]+):(?<port>[0-9]+)$") {
         $hostName = $Matches["host"]
         if ($hostName -eq "0.0.0.0") {
             $hostName = "127.0.0.1"
         }
-        return "http://$hostName`:$($Matches['port'])/health"
+        return "http://$hostName`:$($Matches['port'])/healthz"
     }
-    return "http://127.0.0.1:8081/health"
+    return "http://127.0.0.1:8081/healthz"
 }
 
 function Wait-BrainslugHealth {

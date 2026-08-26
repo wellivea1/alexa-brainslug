@@ -160,13 +160,13 @@ docker compose up --build -d
 docker compose logs -f brainslug
 ```
 
-Administrative health:
+Minimal administrative liveness:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8081/health
+Invoke-RestMethod http://127.0.0.1:8081/healthz
 ```
 
-Confirm:
+Sign in to the dashboard to inspect detailed `/health`, then confirm:
 
 - status is `ok`;
 - provider and model are correct;

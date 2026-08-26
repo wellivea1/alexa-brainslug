@@ -235,6 +235,22 @@ func resolveProviderAuthPath(configured, sqlitePath string) string {
 	return base + ".provider-auth.json"
 }
 
+func resolveAdminAuthPath(configured, sqlitePath string) string {
+	if path := strings.TrimSpace(configured); path != "" {
+		return path
+	}
+	databasePath := strings.TrimSpace(sqlitePath)
+	if databasePath == "" || databasePath == inMemorySQLitePath || strings.HasPrefix(databasePath, "file:") {
+		return ""
+	}
+	extension := filepath.Ext(databasePath)
+	base := strings.TrimSuffix(databasePath, extension)
+	if base == "" {
+		base = databasePath
+	}
+	return base + ".admin-auth.json"
+}
+
 func durationSeconds(value time.Duration) int {
 	if value <= 0 {
 		return 0

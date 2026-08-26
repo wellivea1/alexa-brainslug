@@ -15,6 +15,7 @@ Amazon Alexa cloud
 operator browser or local tooling
   -> host 127.0.0.1:8081
   -> container :8081
+  -> owner login
   -> /health, /history, /
 ```
 
@@ -69,17 +70,23 @@ SQLite data is stored under `./data`.
 
 Leave `SQLITE_PATH` unset in `.env` for the provided container deployment. The image already points it at `/data/brainslug.db`. A host-oriented relative override can send the container to an unwritable or unmounted path.
 
-Administrative health:
+Minimal installer/container liveness:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8081/health
+Invoke-RestMethod http://127.0.0.1:8081/healthz
 ```
 
-Dashboard and history:
+On the first visit, open the dashboard through loopback and create the single
+owner account. The detailed dashboard, `/health`, `/history`, and all provider
+mutations require that login afterward. First-run ownership cannot be created
+through a remote native connection.
+
+Dashboard and authenticated diagnostics:
 
 ```text
 http://127.0.0.1:8081/
 http://127.0.0.1:8081/history
+http://127.0.0.1:8081/health
 ```
 
 Use the Inference page to change the explicit provider, model, endpoint, token
@@ -110,6 +117,12 @@ SQLite directory is the writable persistent volume.
 Dashboard-managed API keys similarly default to
 `/data/brainslug.provider-auth.json` in Docker. Neither credential file needs
 port forwarding; both are consumed only by the local process.
+
+The management owner hash defaults to `/data/brainslug.admin-auth.json` in
+Docker and beside SQLite for native installs. Compose sets
+`ADMIN_SETUP_TRUST_PROXY=true` because the container sees Docker's gateway as
+the source while the host publishes port 8081 only on `127.0.0.1`. Do not use
+that setting with an untrusted or publicly reachable proxy.
 
 The public port should return 404 for those paths:
 

@@ -319,6 +319,7 @@ else {
 }
 if ($started) {
     Write-Host "Dashboard: http://127.0.0.1:8081/"
+    Write-Host "Initial setup: open the dashboard and create the local owner account."
 }
 elseif ($taskExists -or $processWasRunning) {
     Write-Host "Brainslug was stopped for installation. Start it with .\scripts\windows\run-brainslug.ps1"

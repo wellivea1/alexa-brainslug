@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wellivea1/alexa-brainslug/internal/adminauth"
 	"github.com/wellivea1/alexa-brainslug/internal/alexa"
 	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
@@ -89,6 +90,10 @@ func run() error {
 			slog.Error("close sqlite store", "error", err)
 		}
 	}()
+	managementAuth, err := adminauth.New(cfg.AdminAuthFile)
+	if err != nil {
+		return fmt.Errorf("configure management authentication: %w", err)
+	}
 
 	openAIAuth, err := openauth.New(cfg.OpenAI.ChatGPTAuthFile, nil)
 	if err != nil {
@@ -147,7 +152,7 @@ func run() error {
 			name: "admin",
 			server: &http.Server{
 				Addr:              adminAddr,
-				Handler:           buildAdminHandler(&cfg, providerManager, db, startedAt, openAIAuth),
+				Handler:           buildAdminHandler(&cfg, providerManager, db, startedAt, openAIAuth, managementAuth),
 				ReadHeaderTimeout: readHeaderTimeout,
 				ReadTimeout:       readTimeout,
 				WriteTimeout:      adminWriteTimeout,
@@ -210,11 +215,7 @@ func buildPublicHandler(publicBaseURL string, alexaHandler http.Handler) http.Ha
 
 // buildAdminHandler registers local administrative routes on the separate
 // listener. The caller controls binding; the default is host loopback.
-func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time, authentication ...web.OpenAIAuthController) http.Handler {
-	var openAIAuth web.OpenAIAuthController
-	if len(authentication) > 0 {
-		openAIAuth = authentication[0]
-	}
+func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time, openAIAuth web.OpenAIAuthController, managementAuth *adminauth.Manager) http.Handler {
 	dashboard := web.NewDashboard(db, web.Options{
 		Inference:               controller,
 		OpenAIAuth:              openAIAuth,
@@ -223,25 +224,42 @@ func buildAdminHandler(cfg *config.Config, controller web.InferenceController, d
 		HistoryEnabled:          cfg.SaveHistory,
 		PublicBaseURLConfigured: strings.TrimSpace(cfg.PublicBaseURL) != "",
 		SkillIDConfigured:       strings.TrimSpace(cfg.AlexaAllowedSkillID) != "",
+		CSRFToken:               managementAuth.CSRFToken(),
 	})
+	portal := web.NewAdminPortal(managementAuth, web.AdminPortalOptions{TrustSetupProxy: cfg.AdminSetupTrustProxy})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(cfg, controller))
-	mux.HandleFunc("GET /history", dashboard.HandleHistory)
+	mux.HandleFunc("GET /healthz", livenessHandler)
 	mux.HandleFunc("GET /assets/dashboard.css", dashboard.HandleStyles)
 	mux.HandleFunc("GET /assets/dashboard.js", dashboard.HandleScripts)
-	mux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
-	mux.HandleFunc("POST /auth/provider/api-key", dashboard.HandleAPIKeySave)
-	mux.HandleFunc("POST /auth/provider/api-key/remove", dashboard.HandleAPIKeyRemove)
-	mux.HandleFunc("POST /auth/openai/browser", dashboard.HandleOpenAIBrowserStart)
-	mux.HandleFunc("POST /auth/openai/device/start", dashboard.HandleOpenAIDeviceStart)
-	mux.HandleFunc("POST /auth/openai/device/poll", dashboard.HandleOpenAIDevicePoll)
-	mux.HandleFunc("POST /auth/openai/disconnect", dashboard.HandleOpenAIDisconnect)
-	mux.HandleFunc("GET /{$}", dashboard.HandleIndex)
+	mux.HandleFunc("GET /setup", portal.HandleSetupGet)
+	mux.HandleFunc("POST /setup", portal.HandleSetupPost)
+	mux.HandleFunc("GET /login", portal.HandleLoginGet)
+	mux.HandleFunc("POST /login", portal.HandleLoginPost)
+	mux.HandleFunc("POST /alexa", http.NotFound)
+
+	privateMux := http.NewServeMux()
+	privateMux.HandleFunc("GET /health", healthHandler(cfg, controller))
+	privateMux.HandleFunc("GET /history", dashboard.HandleHistory)
+	privateMux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
+	privateMux.HandleFunc("POST /auth/provider/api-key", dashboard.HandleAPIKeySave)
+	privateMux.HandleFunc("POST /auth/provider/api-key/remove", dashboard.HandleAPIKeyRemove)
+	privateMux.HandleFunc("POST /auth/openai/browser", dashboard.HandleOpenAIBrowserStart)
+	privateMux.HandleFunc("POST /auth/openai/device/start", dashboard.HandleOpenAIDeviceStart)
+	privateMux.HandleFunc("POST /auth/openai/device/poll", dashboard.HandleOpenAIDevicePoll)
+	privateMux.HandleFunc("POST /auth/openai/disconnect", dashboard.HandleOpenAIDisconnect)
+	privateMux.HandleFunc("POST /logout", portal.HandleLogout)
+	privateMux.HandleFunc("GET /{$}", dashboard.HandleIndex)
+	mux.Handle("/", portal.Require(privateMux))
 
 	return security.RequestLogger(
 		security.Headers("",
 			security.LimitRequestBody(maxRequestBodyBytes, mux)))
+}
+
+func livenessHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok","service":"alexa-brainslug"}` + "\n"))
 }
 
 // healthHandler reports liveness and the effective configuration.

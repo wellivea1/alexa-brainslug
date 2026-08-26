@@ -131,7 +131,8 @@ The opening banner appears before setup begins. The installer then:
 9. Replaces `bin/brainslug.exe` with the tested candidate.
 10. Applies the selected startup choice and starts Brainslug unless asked not
     to.
-11. Checks the private health endpoint and prints a congratulatory banner.
+11. Checks the minimal private liveness endpoint and prints a congratulatory banner.
+12. Directs the operator to create the local owner account in the first-run dashboard.
 
 The interactive startup question is:
 
@@ -231,7 +232,8 @@ To remove automatic startup while keeping the installation:
 - Keep the checkout and its `.env`, database, settings, and auth files private.
 - Do not change the Scheduled Task to run with highest privileges.
 - Do not use a machine-wide startup task for this single-owner deployment.
-- Do not expose port `8081`; startup automation does not add authentication.
+- Do not expose port `8081`; owner login is defense in depth for a local
+  management path, not permission to publish it.
 - Review source changes before running `update.ps1` when the repository is not
   controlled solely by you.
 - A branch archive is mutable. Pin and review a Git checkout when reproducible

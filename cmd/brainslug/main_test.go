@@ -5,11 +5,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wellivea1/alexa-brainslug/internal/adminauth"
 	"github.com/wellivea1/alexa-brainslug/internal/alexa"
 	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
@@ -38,7 +40,7 @@ func TestPublicHandlerExposesOnlyAlexa(t *testing.T) {
 		t.Fatalf("POST /alexa status = %d", rec.Code)
 	}
 
-	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css", "/assets/dashboard.js", "/settings/provider", "/auth/provider/api-key", "/auth/provider/api-key/remove", "/auth/openai/browser", "/auth/openai/device/start", "/auth/openai/device/poll", "/auth/openai/disconnect"} {
+	for _, path := range []string{"/", "/healthz", "/health", "/history", "/setup", "/login", "/logout", "/assets/dashboard.css", "/assets/dashboard.js", "/settings/provider", "/auth/provider/api-key", "/auth/provider/api-key/remove", "/auth/openai/browser", "/auth/openai/device/start", "/auth/openai/device/poll", "/auth/openai/disconnect"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
 			rec := httptest.NewRecorder()
@@ -51,7 +53,8 @@ func TestPublicHandlerExposesOnlyAlexa(t *testing.T) {
 }
 
 func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "brainslug.db"))
+	directory := t.TempDir()
+	db, err := store.Open(t.Context(), filepath.Join(directory, "brainslug.db"))
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
 	}
@@ -71,9 +74,13 @@ func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
 		ActiveProvider: config.ProviderOpenAI,
 		OpenAI:         inference.ProviderState{ID: config.ProviderOpenAI, Model: "gpt-test"},
 	}}
-	handler := buildAdminHandler(&cfg, controller, db, time.Now().UTC())
+	managementAuth, err := adminauth.New(filepath.Join(directory, "brainslug.admin-auth.json"), adminauth.Options{PasswordIterations: 1_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := buildAdminHandler(&cfg, controller, db, time.Now().UTC(), nil, managementAuth)
 
-	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css", "/assets/dashboard.js"} {
+	for _, path := range []string{"/healthz", "/assets/dashboard.css", "/assets/dashboard.js"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
 			rec := httptest.NewRecorder()
@@ -82,6 +89,52 @@ func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
 				t.Errorf("GET %s status = %d, body = %s", path, rec.Code, rec.Body.String())
 			}
 		})
+	}
+
+	for _, path := range []string{"/health", "/history"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("unauthenticated GET %s status = %d", path, rec.Code)
+		}
+	}
+	root := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
+	rootRec := httptest.NewRecorder()
+	handler.ServeHTTP(rootRec, root)
+	if rootRec.Code != http.StatusSeeOther || rootRec.Header().Get("Location") != "/setup" {
+		t.Fatalf("fresh root response = %d %q", rootRec.Code, rootRec.Header().Get("Location"))
+	}
+
+	form := url.Values{
+		"csrf_token":            {managementAuth.CSRFToken()},
+		"username":              {"owner"},
+		"password":              {"correct horse battery staple"},
+		"password_confirmation": {"correct horse battery staple"},
+	}
+	setup := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/setup", strings.NewReader(form.Encode()))
+	setup.Host = "127.0.0.1:8081"
+	setup.RemoteAddr = "127.0.0.1:12345"
+	setup.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setup.Header.Set("Origin", "http://127.0.0.1:8081")
+	setupRec := httptest.NewRecorder()
+	handler.ServeHTTP(setupRec, setup)
+	if setupRec.Code != http.StatusSeeOther {
+		t.Fatalf("setup status = %d, body = %s", setupRec.Code, setupRec.Body.String())
+	}
+	cookies := setupRec.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
+		t.Fatalf("setup cookies = %#v", cookies)
+	}
+
+	for _, path := range []string{"/", "/health", "/history"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+		req.AddCookie(cookies[0])
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("authenticated GET %s status = %d, body = %s", path, rec.Code, rec.Body.String())
+		}
 	}
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alexa", http.NoBody)

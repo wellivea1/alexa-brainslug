@@ -217,6 +217,9 @@ SERVER_ADDR
 
 ADMIN_SERVER_ADDR
   loopback administrative listener
+  GET /healthz
+  GET/POST /setup and /login
+  authenticated owner session
   GET /health
   GET /history
   GET /
@@ -231,7 +234,7 @@ ADMIN_SERVER_ADDR=127.0.0.1:8081
 
 Docker overrides the in-container binds to `:8080` and `:8081`, then maps both ports back to host loopback.
 
-The listener split removes the previous failure mode in which a broad reverse-proxy rule exposed the dashboard and full history feed.
+The listener split removes the previous failure mode in which a broad reverse-proxy rule exposed the dashboard and full history feed. The management adapter also enforces first-run owner setup and an expiring session before private routes are dispatched.
 
 ## Current Synchronous Execution
 
@@ -313,7 +316,10 @@ The file is loaded after environment defaults and before secret-file loading,
 so a restart preserves the last explicit provider/model selection without
 turning the settings file into a credential store.
 
-Remote administration would require separate authentication. It must not be added by exposing the current administrative port.
+The built-in owner login protects local management access. Remote
+administration would additionally require a private HTTPS management proxy,
+stronger operational controls, and deliberate review; it must not be enabled
+by simply exposing the administrative port.
 
 ## Future MCP Adapter
 

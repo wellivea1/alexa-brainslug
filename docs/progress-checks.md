@@ -23,7 +23,7 @@ CI is configured to check:
 - formatting;
 - ASCII-only repository policy;
 - Docker image build;
-- container startup and administrative `/health`.
+- container startup through `/healthz` and authenticated administrative `/health`.
 
 Coverage is diagnostic, not a quota. A changed behavior needs a test that would fail against the previous behavior.
 
@@ -136,7 +136,7 @@ Real environment:
 ## Listener Isolation Review
 
 - [x] Public mux registers only `POST /alexa`.
-- [x] Administrative mux registers `/health`, `/history`, and `/`.
+- [x] Administrative mux exposes minimal `/healthz` and protects `/health`, `/history`, and `/` behind owner login.
 - [x] `ADMIN_SERVER_ADDR` defaults to loopback.
 - [x] Configuration rejects identical listener addresses.
 - [x] Docker explicitly uses an in-container wildcard admin bind and maps it only to host loopback.
@@ -275,7 +275,7 @@ Before continuous public exposure:
 - [x] SQLite data persists under `./data`.
 - [x] ASK port is host-loopback only.
 - [x] Administrative port is host-loopback only.
-- [x] Administrative `/health` reports provider and model without secrets.
+- [x] Authenticated administrative `/health` reports provider and model without secrets.
 - [x] Dashboard provides overview, searchable activity, and integrated provider management.
 - [x] Provider/model changes activate without restart and persist without credentials.
 - [x] OpenAI API-key and ChatGPT account authentication are distinct, with PKCE browser login, code fallback, refresh, disconnect, and secret-free dashboard state.
@@ -306,16 +306,16 @@ If any item is false, keep MCP gated.
 Administrative health:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8081/health
+Invoke-RestMethod http://127.0.0.1:8081/healthz
 ```
 
-Expected:
+Expected for `/healthz`:
 
 - `status` is `ok`;
-- provider matches `AI_PROVIDER`;
-- model matches the configured provider model;
-- Alexa verification state is visible;
 - no credentials are returned.
+
+After owner login, authenticated `/health` also reports the selected provider,
+model, and Alexa verification state.
 
 Public route probes:
 

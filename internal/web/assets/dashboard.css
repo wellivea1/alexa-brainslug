@@ -162,6 +162,12 @@ h1 { margin-bottom: 2px; font-size: 24px; line-height: 1.1; letter-spacing: -.02
 .topbar-status strong, .topbar-status span { display: block; }
 .topbar-status strong { font-size: 12px; }
 .topbar-status div > span { color: var(--ink-3); font-size: 10px; }
+.topbar-meta, .owner-session { display: flex; align-items: center; gap: 16px; }
+.owner-session { padding-left: 16px; border-left: 1px solid var(--line); }
+.owner-session > span strong, .owner-session > span small { display: block; }
+.owner-session > span strong { font-size: 11px; }
+.owner-session > span small { color: var(--ink-3); font-size: 10px; }
+.owner-session form { margin: 0; }
 .status-dot, .health-icon {
   width: 8px;
   height: 8px;
@@ -192,6 +198,21 @@ footer {
 .notice { margin-bottom: 14px; padding: 9px 12px; border: 1px solid var(--line); background: var(--surface); }
 .notice-ok { color: var(--ok); }
 .notice-error { color: var(--bad); }
+
+.auth-page { display: grid; place-items: center; padding: 28px; }
+.auth-shell { width: min(100%, 430px); padding: 0; }
+.auth-brand { display: flex; align-items: center; gap: 11px; margin-bottom: 18px; }
+.auth-brand strong, .auth-brand small { display: block; }
+.auth-brand strong { font-size: 16px; }
+.auth-brand small { color: var(--ink-3); font-size: 11px; }
+.auth-panel { border: 1px solid var(--line-strong); background: var(--canvas-soft); }
+.auth-panel > .eyebrow { margin: 0; padding: 18px 20px 0; }
+.auth-panel > h1 { margin: 0; padding: 2px 20px 0; }
+.auth-panel > p:not(.eyebrow) { margin: 0; padding: 7px 20px 18px; color: var(--ink-2); border-bottom: 1px solid var(--line); }
+.auth-panel > .notice { margin: 14px 20px 0; }
+.auth-form { display: grid; gap: 15px; padding: 20px; }
+.auth-form .button { justify-self: start; min-width: 120px; }
+.auth-foot { margin: 13px 0 0; color: var(--ink-3); font-size: 10px; text-align: center; }
 
 /* Overview: one operational band followed by two clearly bounded regions. */
 .overview-status {

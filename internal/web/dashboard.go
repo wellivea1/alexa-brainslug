@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wellivea1/alexa-brainslug/internal/adminauth"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
 	"github.com/wellivea1/alexa-brainslug/internal/inference"
 	"github.com/wellivea1/alexa-brainslug/internal/openauth"
@@ -355,6 +356,7 @@ type pageData struct {
 	GeneratedAt          time.Time
 	Uptime               string
 	CSRFToken            string
+	AdminUsername        string
 	Notice               string
 	FormError            string
 	System               systemView
@@ -445,6 +447,7 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 		GeneratedAt:          time.Now().UTC(),
 		Uptime:               formatUptime(time.Since(d.startedAt)),
 		CSRFToken:            d.csrfToken,
+		AdminUsername:        adminauth.UsernameFromContext(r.Context()),
 		FormError:            formError,
 		System:               system,
 		Stats:                calculateStats(interactions),
@@ -462,6 +465,9 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 	}
 	if r.URL.Query().Get("saved") == "1" {
 		data.Notice = "Inference settings saved and activated."
+	}
+	if r.URL.Query().Get("setup") == "complete" {
+		data.Notice = "Owner account created. The management portal is now protected."
 	}
 	switch r.URL.Query().Get("credential") {
 	case "saved":

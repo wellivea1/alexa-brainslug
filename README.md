@@ -61,11 +61,12 @@ owner
 | Listener | Purpose | Exposure |
 | --- | --- | --- |
 | `127.0.0.1:8080` | `POST /alexa` only | Path-scoped HTTPS proxy |
-| `127.0.0.1:8081` | Dashboard, history, health | Host loopback only |
+| `127.0.0.1:8081` | Owner-protected dashboard, history, detailed health | Host loopback only |
 
 > [!IMPORTANT]
 > Never expose port `8081`. It contains private prompts, answers, and provider
-> settings and has no remote-user authentication.
+> settings. The owner login is defense in depth for a local/private management
+> path, not permission to publish it to the internet.
 
 See [Architecture](docs/architecture.md) for the adapter boundaries and
 listener design.
@@ -157,9 +158,14 @@ go run ./cmd/brainslug
 Check the private listener:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8081/health
+Invoke-RestMethod http://127.0.0.1:8081/healthz
 Start-Process http://127.0.0.1:8081/
 ```
+
+The first dashboard visit opens initial setup. Create the single owner account
+there; the dashboard, detailed `/health`, history, and provider controls require
+that login afterward. Sessions expire after 30 minutes idle and are cleared on
+restart.
 
 The full configuration surface is documented in
 [`.env.example`](.env.example). Provider and model selection are always
@@ -249,10 +255,14 @@ for native, Docker, Caddy, and tunnel layouts.
 | `brainslug.settings.json` | Non-secret dashboard settings |
 | `brainslug.provider-auth.json` | Saved provider API keys |
 | `brainslug.openai-auth.json` | Refreshable ChatGPT account credentials |
+| `brainslug.admin-auth.json` | Management owner name and salted password hash |
 
 Treat the database, auth files, and backups as private. Paths can be changed
-with `SQLITE_PATH`, `RUNTIME_SETTINGS_PATH`, `PROVIDER_AUTH_FILE`, and
-`OPENAI_CHATGPT_AUTH_FILE`.
+with `SQLITE_PATH`, `RUNTIME_SETTINGS_PATH`, `PROVIDER_AUTH_FILE`,
+`OPENAI_CHATGPT_AUTH_FILE`, and `ADMIN_AUTH_FILE`.
+
+The management security review and residual operating requirements are in
+[`docs/security-audit.md`](docs/security-audit.md).
 
 ## Development
 

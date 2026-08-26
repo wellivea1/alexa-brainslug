@@ -79,6 +79,14 @@ type Config struct {
 	// secrets are still supported independently.
 	ProviderAuthFile string
 
+	// AdminAuthFile stores the first-run management owner password hash. It is
+	// separate from provider credentials and never contains a session token.
+	AdminAuthFile string
+
+	// AdminSetupTrustProxy permits a trusted local container proxy to relay
+	// first-run setup while preserving a loopback Host header.
+	AdminSetupTrustProxy bool
+
 	// AlexaVerifyRequests gates Alexa request signature verification. It
 	// defaults to true and fails closed.
 	AlexaVerifyRequests bool
@@ -206,13 +214,15 @@ func Load() (Config, error) {
 			MaxOutputTokens: env.intVal("ANTHROPIC_MAX_OUTPUT_TOKENS", defaultAnthropicMaxOutputTokens),
 			Timeout:         env.seconds("ANTHROPIC_TIMEOUT_SECONDS", defaultTimeoutSeconds),
 		},
-		SQLitePath:          env.str("SQLITE_PATH", defaultSQLitePath),
-		RuntimeSettingsPath: env.str("RUNTIME_SETTINGS_PATH", ""),
-		ProviderAuthFile:    env.str("PROVIDER_AUTH_FILE", ""),
-		AlexaVerifyRequests: env.boolVal("ALEXA_VERIFY_REQUESTS", true),
-		AlexaAllowedSkillID: env.str("ALEXA_ALLOWED_SKILL_ID", ""),
-		LogLevel:            env.str("LOG_LEVEL", defaultLogLevel),
-		SaveHistory:         env.boolVal("SAVE_HISTORY", true),
+		SQLitePath:           env.str("SQLITE_PATH", defaultSQLitePath),
+		RuntimeSettingsPath:  env.str("RUNTIME_SETTINGS_PATH", ""),
+		ProviderAuthFile:     env.str("PROVIDER_AUTH_FILE", ""),
+		AdminAuthFile:        env.str("ADMIN_AUTH_FILE", ""),
+		AdminSetupTrustProxy: env.boolVal("ADMIN_SETUP_TRUST_PROXY", false),
+		AlexaVerifyRequests:  env.boolVal("ALEXA_VERIFY_REQUESTS", true),
+		AlexaAllowedSkillID:  env.str("ALEXA_ALLOWED_SKILL_ID", ""),
+		LogLevel:             env.str("LOG_LEVEL", defaultLogLevel),
+		SaveHistory:          env.boolVal("SAVE_HISTORY", true),
 	}
 
 	if err := env.err(); err != nil {
@@ -224,6 +234,7 @@ func Load() (Config, error) {
 	}
 	cfg.OpenAI.ChatGPTAuthFile = resolveOpenAIAuthPath(cfg.OpenAI.ChatGPTAuthFile, cfg.SQLitePath)
 	cfg.ProviderAuthFile = resolveProviderAuthPath(cfg.ProviderAuthFile, cfg.SQLitePath)
+	cfg.AdminAuthFile = resolveAdminAuthPath(cfg.AdminAuthFile, cfg.SQLitePath)
 
 	if err := cfg.loadSecretFiles(); err != nil {
 		return Config{}, err

@@ -11,6 +11,7 @@ services:
     environment:
       SERVER_ADDR: ":8080"
       ADMIN_SERVER_ADDR: ":8081"
+      ADMIN_SETUP_TRUST_PROXY: "true"
 
     # Caddy or Cloudflare Tunnel may route only port 8080 and /alexa publicly.
     # Port 8081 is the local dashboard, history feed, and health endpoint.
@@ -49,7 +50,7 @@ services:
         max-file: "3"
 
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "--tries=1", "http://127.0.0.1:8081/health"]
+      test: ["CMD", "wget", "--quiet", "--spider", "--tries=1", "http://127.0.0.1:8081/healthz"]
       interval: 30s
       timeout: 3s
       start_period: 5s

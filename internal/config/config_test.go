@@ -32,6 +32,7 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_TEXT_VERBOSITY", "medium")
 	t.Setenv("SQLITE_PATH", "test.db")
 	t.Setenv("RUNTIME_SETTINGS_PATH", filepath.Join(t.TempDir(), "missing-settings.json"))
+	t.Setenv("ADMIN_SETUP_TRUST_PROXY", "true")
 	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
 	t.Setenv("ALEXA_ALLOWED_SKILL_ID", "amzn1.ask.skill.test")
 	t.Setenv("LOG_LEVEL", "debug")
@@ -68,6 +69,9 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	}
 	if cfg.SaveHistory {
 		t.Fatal("SaveHistory should be false")
+	}
+	if !cfg.AdminSetupTrustProxy {
+		t.Fatal("AdminSetupTrustProxy should be true")
 	}
 }
 
@@ -228,6 +232,10 @@ func TestRuntimeSettingsSelectChatGPTAndDerivePrivateCredentialPath(t *testing.T
 	wantProviderAuthPath := filepath.Join(directory, "brainslug.provider-auth.json")
 	if cfg.ProviderAuthFile != wantProviderAuthPath {
 		t.Fatalf("ProviderAuthFile = %q, want %q", cfg.ProviderAuthFile, wantProviderAuthPath)
+	}
+	wantAdminAuthPath := filepath.Join(directory, "brainslug.admin-auth.json")
+	if cfg.AdminAuthFile != wantAdminAuthPath {
+		t.Fatalf("AdminAuthFile = %q, want %q", cfg.AdminAuthFile, wantAdminAuthPath)
 	}
 }
 

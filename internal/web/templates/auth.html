@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{{.Title}} · Brainslug</title>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=10">
+  <script src="/assets/dashboard.js?v=3" defer></script>
+</head>
+<body class="auth-page">
+  <main class="auth-shell">
+    <header class="auth-brand">
+      <span class="brand-mark" aria-hidden="true"><span class="brand-orbit"></span><span class="brand-slug"></span></span>
+      <span><strong>Brainslug</strong><small>Local management</small></span>
+    </header>
+    <section class="auth-panel" aria-labelledby="auth-title">
+      <p class="eyebrow">{{if eq .Mode "setup"}}Initial setup{{else}}Owner access{{end}}</p>
+      <h1 id="auth-title">{{.Title}}</h1>
+      <p>{{.Description}}</p>
+      {{if .FormError}}<div class="notice notice-error" role="alert">{{.FormError}}</div>{{end}}
+      <form method="post" action="/{{.Mode}}" class="auth-form">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <label class="field" for="username"><span>Username</span><span class="field-control"><input id="username" name="username" value="{{.Username}}" autocomplete="username" required minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{2,63}"></span></label>
+        <label class="field" for="password"><span>Password</span><span class="field-control"><input id="password" type="password" name="password" autocomplete="{{if eq .Mode "setup"}}new-password{{else}}current-password{{end}}" required minlength="12" maxlength="128">{{if eq .Mode "setup"}}<small>Use at least 12 characters. Brainslug stores only a salted password hash.</small>{{end}}</span></label>
+        {{if eq .Mode "setup"}}<label class="field" for="password-confirmation"><span>Confirm password</span><span class="field-control"><input id="password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" required minlength="12" maxlength="128"></span></label>{{end}}
+        <button class="button button-primary" type="submit">{{.SubmitLabel}}</button>
+      </form>
+    </section>
+    <p class="auth-foot">Management data remains on this machine. Do not expose port 8081 directly to the internet.</p>
+  </main>
+</body>
+</html>
