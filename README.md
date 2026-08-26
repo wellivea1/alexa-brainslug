@@ -288,10 +288,3 @@ timeouts are not a substitute for a persisted deferred-job path.
 - [Progress checks](docs/progress-checks.md)
 - [MCP roadmap](docs/mcp-roadmap.md)
 
----
-
-<p align="center">
-  <strong>Small skill. Explicit brain. Private memory.</strong><br>
-  Proprietary software for the owner's self-hosted use. See
-  <a href="LICENSE">LICENSE</a>.
-</p>
