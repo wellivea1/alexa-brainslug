@@ -12,10 +12,11 @@
             }
           ],
           "samples": [
-            "ask {Query}",
-            "send {Query}",
-            "question {Query}",
-            "ask chat g p t {Query}"
+            "about {Query}",
+            "regarding {Query}",
+            "to answer {Query}",
+            "the question {Query}",
+            "this question {Query}"
           ]
         },
         {
@@ -50,6 +51,39 @@
         }
       ],
       "types": []
-    }
+    },
+    "dialog": {
+      "delegationStrategy": "SKILL_RESPONSE",
+      "intents": [
+        {
+          "name": "AskGPTIntent",
+          "delegationStrategy": "ALWAYS",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "Query",
+              "type": "AMAZON.SearchQuery",
+              "confirmationRequired": false,
+              "elicitationRequired": true,
+              "prompts": {
+                "elicitation": "Elicit.Slot.Query"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "prompts": [
+      {
+        "id": "Elicit.Slot.Query",
+        "variations": [
+          {
+            "type": "PlainText",
+            "value": "What should I ask?"
+          }
+        ]
+      }
+    ]
   }
 }

@@ -1,10 +1,9 @@
 // Package alexa implements the Alexa custom skill endpoint: request
 // verification, intent routing, and response construction.
 //
-// The package deliberately does not depend on the config package. It takes an
-// Options value describing only what it needs, which keeps it testable
-// without a process environment and keeps the dependency graph one edge
-// smaller.
+// The package is an inbound adapter. It translates ASK requests into
+// application operations and translates application results back into Alexa
+// responses; provider execution and persistence policy live outside it.
 package alexa
 
 import (
@@ -15,22 +14,20 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/wellivea1/alexa-brainslug/internal/prompts"
-	"github.com/wellivea1/alexa-brainslug/internal/providers"
-	"github.com/wellivea1/alexa-brainslug/internal/security"
-	"github.com/wellivea1/alexa-brainslug/internal/store"
+	"github.com/wellivea1/alexa-brainslug/internal/app"
 )
 
 // maxRequestBytes caps the Alexa request body. Real requests are a few
 // kilobytes; this bounds what a malicious caller can make the process read.
 const maxRequestBytes = 1 << 20
 
+const alexaPrincipalNamespace = "alexa"
+
 // Spoken responses. They are constants because every one of them is user
 // experience: each is heard aloud, with no screen to fall back on.
 const (
-	speechReady        = "Brainslug is ready. What should I ask?"
+	speechReady        = "Brainslug is ready."
 	speechRepromptAsk  = "What should I ask?"
 	speechRepromptHelp = "Try asking Brain Slug a question."
 	speechGoodbye      = "Goodbye."
@@ -40,6 +37,7 @@ const (
 	speechFallback     = "I did not catch the question. Say ask, followed by what you want to know."
 	speechUnknownType  = "I did not recognize that Alexa request."
 	speechUnknownName  = "I do not know how to handle that request yet."
+	speechUnknownUser  = "I could not identify this Alexa account."
 	speechNoIntent     = "I did not catch the intent."
 	speechNoHistory    = "I do not have a previous response for you yet."
 	speechHistoryError = "I could not read the local history right now."
@@ -54,47 +52,33 @@ const (
 	speechProviderNoText    = "The AI provider ran out of room before it answered. The response limit may be too low."
 )
 
-// Status values recorded in history.
-const (
-	statusOK    = "ok"
-	statusError = "error"
-)
+// ApplicationService is the platform-neutral behavior the ASK adapter needs.
+type ApplicationService interface {
+	// Ask submits one normalized question.
+	Ask(ctx context.Context, req app.AskRequest) (app.Answer, error)
 
-// InteractionStore is the slice of the history store the handler needs.
-// Narrowing it here keeps the handler testable with a fake.
-type InteractionStore interface {
-	SaveInteraction(ctx context.Context, interaction store.Interaction) (int64, error)
-	GetLatestResponse(ctx context.Context, userID string) (*store.Interaction, error)
+	// LatestAnswer returns the caller's newest saved answer.
+	LatestAnswer(ctx context.Context, principal app.Principal) (app.Answer, error)
 }
 
-// Options is the handler's configuration.
+// Options is the ASK adapter configuration.
 type Options struct {
-	// Model and MaxOutputTokens are passed through to the provider and
-	// recorded in history, so that history shows what actually answered.
-	Model           string
-	MaxOutputTokens int
-
-	// SaveHistory controls persistence. When false the handler still answers,
-	// it just keeps no record, which also disables the last response intent.
-	SaveHistory bool
-
-	// Secrets are redacted from provider errors before storage.
-	Secrets []string
-
 	// Verification controls Alexa request authentication.
 	Verification VerificationConfig
 }
 
 // Handler serves POST /alexa.
 type Handler struct {
-	opts     Options
-	provider providers.Provider
-	store    InteractionStore
+	application ApplicationService
+	verifier    *RequestVerifier
 }
 
 // NewHandler builds the Alexa endpoint handler.
-func NewHandler(opts Options, provider providers.Provider, interactionStore InteractionStore) *Handler {
-	return &Handler{opts: opts, provider: provider, store: interactionStore}
+func NewHandler(opts Options, application ApplicationService) *Handler {
+	return &Handler{
+		application: application,
+		verifier:    NewRequestVerifier(opts.Verification),
+	}
 }
 
 // ServeHTTP implements http.Handler.
@@ -118,7 +102,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := VerifyRequest(r, body, &envelope, h.opts.Verification); err != nil {
+	if err := h.verifier.Verify(r, body, &envelope); err != nil {
 		// Amazon specifies 400 for a request that fails verification. The
 		// reason is logged locally and never returned: an attacker probing
 		// the endpoint learns nothing about which check failed.
@@ -134,7 +118,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Route(ctx context.Context, envelope *RequestEnvelope) ResponseEnvelope {
 	switch envelope.Request.Type {
 	case requestTypeLaunch:
-		return NewAsk(speechReady, speechRepromptAsk)
+		return NewDelegate(speechReady, IntentAskGPT, slotQuery)
 	case requestTypeIntent:
 		return h.handleIntent(ctx, envelope)
 	case requestTypeSessionEnded:
@@ -165,123 +149,87 @@ func (h *Handler) handleIntent(ctx context.Context, envelope *RequestEnvelope) R
 	}
 }
 
-// handleAskGPT sends the captured question to the provider.
 func (h *Handler) handleAskGPT(ctx context.Context, envelope *RequestEnvelope) ResponseEnvelope {
 	query := envelope.Request.Intent.SlotValue(slotQuery)
 	if query == "" {
 		return NewAsk(speechNoQuery, speechNoQueryHint)
 	}
-
-	started := time.Now()
-	resp, err := h.provider.Ask(ctx, providers.Request{
-		UserID:          envelope.UserID(),
-		Prompt:          query,
-		Model:           h.opts.Model,
-		MaxOutputTokens: h.opts.MaxOutputTokens,
-		SystemPrompt:    prompts.DefaultSystemPrompt,
-	})
-
-	// Prefer the provider's own measurement, which excludes local encoding
-	// and response shaping.
-	latency := resp.Latency
-	if latency <= 0 {
-		latency = time.Since(started)
+	if h.application == nil {
+		return NewTell(speechProviderMisconfig)
 	}
 
+	principal := principalForEnvelope(envelope)
+	if !principal.Valid() {
+		return NewTell(speechUnknownUser)
+	}
+	answer, err := h.application.Ask(ctx, app.AskRequest{
+		Principal:      principal,
+		ConversationID: envelope.SessionID(),
+		Prompt:         query,
+	})
 	if err != nil {
-		h.saveInteraction(ctx, store.Interaction{
-			AlexaUserID:  envelope.UserID(),
-			SessionID:    envelope.SessionID(),
-			Provider:     h.provider.Name(),
-			Model:        h.opts.Model,
-			Prompt:       query,
-			LatencyMS:    latency.Milliseconds(),
-			Status:       statusError,
-			ErrorMessage: security.RedactString(err.Error(), h.opts.Secrets...),
-		})
-		slog.WarnContext(ctx, "provider call failed", "provider", h.provider.Name(), "error", err)
-		return NewTell(speechForProviderError(err))
+		slog.WarnContext(ctx, "application question failed", "error", err)
+		return NewTell(speechForApplicationError(err))
 	}
 
-	short := strings.TrimSpace(resp.ShortAnswer)
-	if short == "" {
-		short = speechEmptyAnswer
+	shortAnswer := strings.TrimSpace(answer.ShortAnswer)
+	if shortAnswer == "" {
+		shortAnswer = speechEmptyAnswer
 	}
-
-	h.saveInteraction(ctx, store.Interaction{
-		AlexaUserID: envelope.UserID(),
-		SessionID:   envelope.SessionID(),
-		Provider:    firstNonEmpty(resp.ProviderName, h.provider.Name()),
-		Model:       firstNonEmpty(resp.Model, h.opts.Model),
-		Prompt:      query,
-		ShortAnswer: short,
-		FullAnswer:  strings.TrimSpace(resp.FullAnswer),
-		LatencyMS:   latency.Milliseconds(),
-		Status:      statusOK,
-	})
-
-	return NewTell(short)
+	return NewTell(shortAnswer)
 }
 
-// speechForProviderError maps a provider failure to something worth hearing.
-//
-// The distinctions are the ones a listener can act on: a misconfiguration
-// needs an operator, a busy provider needs patience, and an exhausted output
-// budget needs a settings change. Everything else is one generic message,
-// because guessing aloud is worse than being brief.
-func speechForProviderError(err error) string {
+func speechForApplicationError(err error) string {
 	switch {
-	case errors.Is(err, providers.ErrNotConfigured):
+	case errors.Is(err, app.ErrInvalidPrincipal):
+		return speechUnknownUser
+	case errors.Is(err, app.ErrProviderNotConfigured):
 		return speechProviderMisconfig
-	case errors.Is(err, providers.ErrEmptyResponse):
+	case errors.Is(err, app.ErrProviderNoText), errors.Is(err, app.ErrProviderOutputLimit):
 		return speechProviderNoText
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, app.ErrProviderUnavailable), errors.Is(err, context.DeadlineExceeded):
 		return speechProviderBusy
+	default:
+		return speechProviderError
 	}
-
-	var apiErr *providers.APIError
-	if errors.As(err, &apiErr) && apiErr.Retryable() {
-		return speechProviderBusy
-	}
-	return speechProviderError
 }
 
-// handleLastResponse speaks the most recent stored answer for this user.
 func (h *Handler) handleLastResponse(ctx context.Context, envelope *RequestEnvelope) ResponseEnvelope {
-	if h.store == nil || !h.opts.SaveHistory {
+	if h.application == nil {
 		return NewTell(speechNoHistory)
 	}
 
-	latest, err := h.store.GetLatestResponse(ctx, envelope.UserID())
+	principal := principalForEnvelope(envelope)
+	if !principal.Valid() {
+		return NewTell(speechUnknownUser)
+	}
+	answer, err := h.application.LatestAnswer(ctx, principal)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		switch {
+		case errors.Is(err, app.ErrNoHistory):
 			return NewTell(speechNoHistory)
+		case errors.Is(err, app.ErrEmptySavedAnswer):
+			return NewTell(speechEmptyPrior)
+		default:
+			slog.WarnContext(ctx, "load latest response", "error", err)
+			return NewTell(speechHistoryError)
 		}
-		slog.WarnContext(ctx, "load latest response", "error", err)
-		return NewTell(speechHistoryError)
 	}
 
-	answer := strings.TrimSpace(latest.ShortAnswer)
-	if answer == "" {
-		answer = strings.TrimSpace(latest.FullAnswer)
+	answerText := strings.TrimSpace(answer.ShortAnswer)
+	if answerText == "" {
+		answerText = strings.TrimSpace(answer.FullAnswer)
 	}
-	if answer == "" {
+	if answerText == "" {
 		return NewTell(speechEmptyPrior)
 	}
-	return NewTell(answer)
+	return NewTell(answerText)
 }
 
-// saveInteraction records an interaction, if history is enabled.
-//
-// A failure to record is logged and swallowed: the user has already been
-// answered, and failing the spoken response because a local write failed
-// would make things worse rather than better.
-func (h *Handler) saveInteraction(ctx context.Context, interaction store.Interaction) {
-	if !h.opts.SaveHistory || h.store == nil {
-		return
-	}
-	if _, err := h.store.SaveInteraction(ctx, interaction); err != nil {
-		slog.WarnContext(ctx, "save interaction", "error", err)
+func principalForEnvelope(envelope *RequestEnvelope) app.Principal {
+	return app.Principal{
+		Namespace: alexaPrincipalNamespace,
+		Subject:   envelope.UserID(),
 	}
 }
 
@@ -295,14 +243,4 @@ func (h *Handler) writeResponse(ctx context.Context, w http.ResponseWriter, resp
 		// would make a truncated reply look like an Alexa-side fault.
 		slog.ErrorContext(ctx, "encode alexa response", "error", err)
 	}
-}
-
-// firstNonEmpty returns the first value that is not blank.
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

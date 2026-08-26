@@ -116,11 +116,11 @@ func anthropicMessages(prior []Message, prompt string) []anthropicMessage {
 		if content == "" {
 			continue
 		}
-		if role == "assistant" || role == "user" {
+		if role == "assistant" || role == providerRoleUser {
 			messages = append(messages, anthropicMessage{Role: role, Content: content})
 		}
 	}
-	return append(messages, anthropicMessage{Role: "user", Content: prompt})
+	return append(messages, anthropicMessage{Role: providerRoleUser, Content: prompt})
 }
 
 // text concatenates the text blocks of a response. Thinking blocks and other

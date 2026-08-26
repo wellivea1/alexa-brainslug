@@ -28,7 +28,10 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://api.example.test/v1")
 	t.Setenv("OPENAI_MAX_OUTPUT_TOKENS", "128")
 	t.Setenv("OPENAI_TIMEOUT_SECONDS", "3")
+	t.Setenv("OPENAI_REASONING_EFFORT", "high")
+	t.Setenv("OPENAI_TEXT_VERBOSITY", "medium")
 	t.Setenv("SQLITE_PATH", "test.db")
+	t.Setenv("RUNTIME_SETTINGS_PATH", filepath.Join(t.TempDir(), "missing-settings.json"))
 	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
 	t.Setenv("ALEXA_ALLOWED_SKILL_ID", "amzn1.ask.skill.test")
 	t.Setenv("LOG_LEVEL", "debug")
@@ -42,26 +45,215 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	if cfg.ServerAddr != ":9090" {
 		t.Fatalf("ServerAddr = %q", cfg.ServerAddr)
 	}
-	if cfg.OpenAI.Model != "gpt-test" {
-		t.Fatalf("OpenAI.Model = %q", cfg.OpenAI.Model)
+	if cfg.Compatible.Model != "gpt-test" {
+		t.Fatalf("Compatible.Model = %q", cfg.Compatible.Model)
 	}
-	if cfg.Provider != "openai" {
+	if cfg.Provider != ProviderOpenAICompatible {
 		t.Fatalf("Provider = %q", cfg.Provider)
 	}
 	if cfg.SelectedModel() != "gpt-test" {
 		t.Fatalf("SelectedModel = %q", cfg.SelectedModel())
 	}
-	if cfg.OpenAI.MaxOutputTokens != 128 {
-		t.Fatalf("MaxOutputTokens = %d", cfg.OpenAI.MaxOutputTokens)
+	if cfg.Compatible.MaxOutputTokens != 128 {
+		t.Fatalf("MaxOutputTokens = %d", cfg.Compatible.MaxOutputTokens)
 	}
-	if cfg.OpenAI.Timeout != 3*time.Second {
-		t.Fatalf("Timeout = %s", cfg.OpenAI.Timeout)
+	if cfg.Compatible.Timeout != 3*time.Second {
+		t.Fatalf("Timeout = %s", cfg.Compatible.Timeout)
+	}
+	if cfg.Compatible.ReasoningEffort != "high" || cfg.Compatible.TextVerbosity != "medium" {
+		t.Fatalf("compatible response controls = %q/%q", cfg.Compatible.ReasoningEffort, cfg.Compatible.TextVerbosity)
 	}
 	if cfg.AlexaVerifyRequests {
 		t.Fatal("AlexaVerifyRequests should be false")
 	}
 	if cfg.SaveHistory {
 		t.Fatal("SaveHistory should be false")
+	}
+}
+
+func TestLoadExplicitCompatibleProvider(t *testing.T) {
+	t.Setenv("AI_PROVIDER", ProviderOpenAICompatible)
+	t.Setenv("OPENAI_MODEL", "gpt-official")
+	t.Setenv("OPENAI_COMPATIBLE_API_KEY", "compatible-key")
+	t.Setenv("OPENAI_COMPATIBLE_MODEL", "local-model")
+	t.Setenv("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:11434/v1")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider != ProviderOpenAICompatible || cfg.SelectedModel() != "local-model" {
+		t.Fatalf("selected route = %q/%q", cfg.Provider, cfg.SelectedModel())
+	}
+	if cfg.OpenAI.Model != "gpt-official" || cfg.Compatible.BaseURL != "http://127.0.0.1:11434/v1" {
+		t.Fatalf("separate provider settings = %#v / %#v", cfg.OpenAI, cfg.Compatible)
+	}
+}
+
+func TestLegacyRuntimeSettingsMoveCustomEndpointToCompatible(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.settings.json")
+	legacy := `{
+  "version": 1,
+  "provider": "openai",
+  "openai": {
+    "model": "legacy-local-model",
+    "base_url": "http://127.0.0.1:11434/v1",
+    "max_output_tokens": 256,
+    "timeout_seconds": 6,
+    "reasoning_effort": "",
+    "text_verbosity": ""
+  },
+  "anthropic": {"model":"", "max_output_tokens":4096, "timeout_seconds":6}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("OPENAI_MODEL", "gpt-official")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider != ProviderOpenAICompatible || cfg.Compatible.Model != "legacy-local-model" {
+		t.Fatalf("legacy route = %q/%#v", cfg.Provider, cfg.Compatible)
+	}
+	if cfg.OpenAI.Model != "gpt-official" {
+		t.Fatalf("official OpenAI model was overwritten: %q", cfg.OpenAI.Model)
+	}
+}
+
+func TestRuntimeSettingsOverrideNonSecretInferenceConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brainslug.settings.json")
+	settings := RuntimeSettings{
+		Provider: "anthropic",
+		OpenAI: OpenAIRuntimeSettings{
+			ProviderRuntimeSettings: ProviderRuntimeSettings{
+				Model: "gpt-5.6-luna", MaxOutputTokens: 4096, TimeoutSeconds: 4,
+			},
+			ReasoningEffort: "none",
+			TextVerbosity:   "low",
+		},
+		Anthropic: ProviderRuntimeSettings{
+			Model: "claude-runtime", BaseURL: "https://anthropic.example/v1", MaxOutputTokens: 2048, TimeoutSeconds: 5,
+		},
+	}
+	if err := SaveRuntimeSettings(path, settings); err != nil {
+		t.Fatalf("SaveRuntimeSettings() error = %v", err)
+	}
+
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("AI_PROVIDER", "openai")
+	t.Setenv("OPENAI_MODEL", "gpt-environment")
+	t.Setenv("ANTHROPIC_MODEL", "claude-environment")
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Provider != ProviderAnthropic || cfg.Anthropic.Model != "claude-runtime" {
+		t.Fatalf("runtime provider/model = %q/%q", cfg.Provider, cfg.Anthropic.Model)
+	}
+	if cfg.Anthropic.BaseURL != "https://anthropic.example/v1" || cfg.Anthropic.Timeout != 5*time.Second {
+		t.Fatalf("runtime Anthropic settings = %#v", cfg.Anthropic)
+	}
+	if cfg.OpenAI.APIKey != "" {
+		t.Fatal("runtime settings unexpectedly supplied a credential")
+	}
+}
+
+func TestRuntimeSettingsCanRestoreProviderResponseControlDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brainslug.settings.json")
+	settings := RuntimeSettings{
+		Provider: ProviderOpenAI,
+		OpenAI: OpenAIRuntimeSettings{ProviderRuntimeSettings: ProviderRuntimeSettings{
+			Model: "compatible-model", MaxOutputTokens: 256, TimeoutSeconds: 6,
+		}},
+	}
+	if err := SaveRuntimeSettings(path, settings); err != nil {
+		t.Fatalf("SaveRuntimeSettings() error = %v", err)
+	}
+
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("AI_PROVIDER", ProviderOpenAI)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_MODEL", "environment-model")
+	t.Setenv("OPENAI_REASONING_EFFORT", "high")
+	t.Setenv("OPENAI_TEXT_VERBOSITY", "high")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.OpenAI.ReasoningEffort != "" || cfg.OpenAI.TextVerbosity != "" {
+		t.Fatalf("response controls = %q/%q, want provider defaults", cfg.OpenAI.ReasoningEffort, cfg.OpenAI.TextVerbosity)
+	}
+}
+
+func TestRuntimeSettingsSelectChatGPTAndDerivePrivateCredentialPath(t *testing.T) {
+	directory := t.TempDir()
+	settingsPath := filepath.Join(directory, "brainslug.settings.json")
+	databasePath := filepath.Join(directory, "brainslug.db")
+	settings := RuntimeSettings{
+		Provider: ProviderOpenAI,
+		OpenAI: OpenAIRuntimeSettings{
+			ProviderRuntimeSettings: ProviderRuntimeSettings{Model: "gpt-5.6-terra", MaxOutputTokens: 1024, TimeoutSeconds: 6},
+			AuthMode:                OpenAIAuthModeChatGPT,
+		},
+	}
+	if err := SaveRuntimeSettings(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUNTIME_SETTINGS_PATH", settingsPath)
+	t.Setenv("SQLITE_PATH", databasePath)
+	t.Setenv("OPENAI_MODEL", "gpt-environment")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenAI.AuthMode != OpenAIAuthModeChatGPT {
+		t.Fatalf("AuthMode = %q", cfg.OpenAI.AuthMode)
+	}
+	wantAuthPath := filepath.Join(directory, "brainslug.openai-auth.json")
+	if cfg.OpenAI.ChatGPTAuthFile != wantAuthPath {
+		t.Fatalf("ChatGPTAuthFile = %q, want %q", cfg.OpenAI.ChatGPTAuthFile, wantAuthPath)
+	}
+	wantProviderAuthPath := filepath.Join(directory, "brainslug.provider-auth.json")
+	if cfg.ProviderAuthFile != wantProviderAuthPath {
+		t.Fatalf("ProviderAuthFile = %q, want %q", cfg.ProviderAuthFile, wantProviderAuthPath)
+	}
+}
+
+func TestValidateRejectsUnknownOpenAIResponseControls(t *testing.T) {
+	cfg := Config{
+		ServerAddr:          "127.0.0.1:8080",
+		Provider:            ProviderOpenAI,
+		SQLitePath:          "test.db",
+		AlexaVerifyRequests: false,
+		OpenAI: OpenAIConfig{
+			Model: "gpt-test", MaxOutputTokens: 128, Timeout: time.Second,
+			ReasoningEffort: "turbo", TextVerbosity: "low",
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported reasoning effort")
+	}
+	cfg.OpenAI.ReasoningEffort = "low"
+	cfg.OpenAI.TextVerbosity = "verbose"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported text verbosity")
+	}
+	cfg.OpenAI.TextVerbosity = "low"
+	cfg.OpenAI.AuthMode = "password"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported OpenAI authentication mode")
 	}
 }
 
@@ -108,6 +300,7 @@ func TestLoadReadsOpenAIAPIKeyFile(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY_FILE", path)
 	t.Setenv("OPENAI_MODEL", "gpt-test")
 	t.Setenv("AI_PROVIDER", "openai")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
 
 	cfg, err := Load()
 	if err != nil {
@@ -127,6 +320,7 @@ func TestLoadAnthropicProvider(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY_FILE", path)
 	t.Setenv("ANTHROPIC_MODEL", "claude-test")
 	t.Setenv("ANTHROPIC_MAX_OUTPUT_TOKENS", "128")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
 
 	cfg, err := Load()
 	if err != nil {
@@ -143,5 +337,25 @@ func TestLoadAnthropicProvider(t *testing.T) {
 	}
 	if cfg.SelectedMaxOutputTokens() != 128 {
 		t.Fatalf("SelectedMaxOutputTokens = %d", cfg.SelectedMaxOutputTokens())
+	}
+}
+
+func TestValidateRequiresAllowedSkillIDInVerifiedMode(t *testing.T) {
+	cfg := Config{
+		ServerAddr:          "127.0.0.1:8080",
+		Provider:            ProviderOpenAI,
+		SQLitePath:          "test.db",
+		OpenAI:              OpenAIConfig{Model: "gpt-test", MaxOutputTokens: 128, Timeout: time.Second},
+		AlexaVerifyRequests: true,
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() accepted verified mode without ALEXA_ALLOWED_SKILL_ID")
+	}
+
+	cfg.AlexaVerifyRequests = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected controlled verification-disabled mode: %v", err)
 	}
 }

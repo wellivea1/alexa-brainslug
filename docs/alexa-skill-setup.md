@@ -2,36 +2,31 @@
 
 This document covers a private classic ASK custom skill for the owner's Alexa account.
 
-It does not configure Alexa+ MCP. Amazon's documented Alexa+ MCP path is a separate partner-gated integration in which Alexa+ calls a third-party MCP server. See `alexa-platform.md` and `mcp-roadmap.md`.
+It does not configure Alexa+ MCP. Alexa+ is a separate partner-gated integration in which Alexa+ calls a third-party MCP server. See `alexa-platform.md` and `mcp-roadmap.md`.
 
-## Before Starting
+## Prerequisites
 
-You need:
+- Amazon developer account associated with the Alexa account used for testing.
+- Brainslug running locally or in Docker.
+- Public HTTPS hostname routing only `/alexa` to the ASK listener.
+- Administrative listener kept on loopback.
+- Selected provider and explicit model.
+- Real skill ID configured in `ALEXA_ALLOWED_SKILL_ID`.
+- `ALEXA_VERIFY_REQUESTS=true`.
 
-- An Amazon developer account associated with the Alexa account used for testing.
-- The Brainslug service running locally.
-- A public HTTPS hostname or short-lived tunnel that can route only `POST /alexa` to the service.
-- An explicit provider and model configured.
-- A plan to remove the public route immediately after initial testing if request verification is still incomplete.
-
-Current security limitation:
-
-- `ALEXA_VERIFY_REQUESTS=true` fails closed because full Alexa signature verification is not implemented.
-- `ALEXA_VERIFY_REQUESTS=false` permits testing but leaves the route unauthenticated.
-
-Do not leave a public endpoint available with verification disabled.
+The custom request verifier is implemented, unit-tested, and validated against Amazon-signed Developer Console requests. Physical Echo recognition remains an external gate.
 
 ## Create The Skill
 
 1. Open the Alexa Developer Console.
 2. Select **Create Skill**.
-3. Enter a development name such as `Alexa Brainslug`.
-4. Choose the primary locale used by the test Echo.
-5. Select a custom skill model.
-6. Use the Alexa-hosted or provision-your-own-resources option that allows an HTTPS endpoint. Brainslug uses its own HTTPS service, not Lambda.
+3. Enter a development name such as `Brainslug`.
+4. Select the locale used by the test Echo.
+5. Choose a custom skill model.
+6. Choose the option that permits your own HTTPS endpoint.
 7. Create the skill.
 
-Console labels can change. The required result is a custom interaction model with an HTTPS endpoint owned by this service.
+Console labels may change. The required result is a custom interaction model whose endpoint is the Brainslug HTTPS service.
 
 ## Configure Invocation
 
@@ -41,34 +36,44 @@ Set the invocation name to:
 brain slug
 ```
 
-Keep explicit invocation as the supported route.
+Explicit invocation is the supported baseline.
 
-Primary test flow:
+Primary two-turn flow:
 
 ```text
 Alexa, open Brain Slug
 Brainslug is ready. What should I ask?
-<question>
+<free-form question>
 ```
 
-The shipped interaction model still contains poor one-shot samples. The intended replacement and two-turn slot-elicitation design are in `invocation-design.md`.
+The launch response contains a `Dialog.Delegate` directive for `AskGPTIntent`. The interaction model marks the `Query` slot required and supplies the prompt Alexa uses to collect it.
 
 ## Import The Interaction Model
 
 1. Open the JSON editor for the interaction model.
-2. Paste the contents of `skill/interaction-model.json`.
+2. Paste `skill/interaction-model.json`.
 3. Save the model.
 4. Build the model.
-5. Resolve any locale-specific validation errors before endpoint testing.
+5. Commit any required locale-specific correction rather than editing only the console copy.
 
-Until the model rewrite lands, use the two-turn launch flow for the least awkward test. Do not treat the current `ask ... ask ...` one-shot phrasing as intended behavior.
+The model currently includes:
 
-After the invocation work is implemented, confirm that the model includes:
+- invocation name `brain slug`;
+- one required `AMAZON.SearchQuery` slot named `Query`;
+- neutral carrier phrases for one-shot questions;
+- `LastResponseIntent`;
+- help, stop, cancel, fallback, and repeat built-ins;
+- a dialog prompt for the missing question.
 
-- `AMAZON.SearchQuery` for the question slot.
-- Natural one-shot carrier phrases.
-- A required `Query` slot or equivalent dialog model for two-turn elicitation.
-- Help, fallback, stop, cancel, repeat, and last-response intents.
+Representative one-shot forms:
+
+```text
+Alexa, ask Brain Slug about the halting problem
+Alexa, ask Brain Slug regarding SQLite write-ahead logging
+Alexa, tell Brain Slug to answer this question: why is the sky blue
+```
+
+The model and HTTPS invocation path can be verified with Developer Console requests. Exact spoken recognition must still be verified in the conversational simulator and on the real Echo.
 
 ## Configure The HTTPS Endpoint
 
@@ -78,21 +83,21 @@ Set the default region endpoint to:
 https://your-domain.example/alexa
 ```
 
-Do not use:
+Do not use a LAN-only URL:
 
 ```text
 http://192.168.x.x:8080/alexa
 http://localhost:8080/alexa
 ```
 
-Alexa requests originate in Amazon's cloud and require a publicly reachable HTTPS endpoint.
+Alexa requests originate in Amazon's cloud.
 
-The public hostname must not route the dashboard, history, or health endpoints.
+The public hostname must route only `/alexa` to host loopback port 8080. It must not route the administrative listener on port 8081.
 
 Expected public behavior:
 
 ```text
-POST /alexa   -> Brainslug
+POST /alexa   -> Brainslug ASK handler
 GET  /        -> 404
 GET  /history -> 404
 GET  /health  -> 404
@@ -102,160 +107,239 @@ See `local-deployment.md`.
 
 ## Record The Skill ID
 
-Copy the skill application ID from the developer console and configure:
+Copy the skill application ID from the developer console and set:
 
 ```text
 ALEXA_ALLOWED_SKILL_ID=amzn1.ask.skill.example
 ```
 
-This is not a substitute for signature verification. It is one required check inside verification.
+The skill ID check prevents another developer's skill from using the endpoint. It supplements request-signature verification; it does not replace it.
 
-Do not commit the real ID in a public example if the repository's privacy model later changes.
+## Configure Verification
 
-## Controlled First Round-Trip Test
-
-Use this only while full verification is incomplete.
-
-1. Start Brainslug locally.
-2. Confirm the provider and model in `/health`.
-3. Set:
-
-```text
-ALEXA_VERIFY_REQUESTS=false
-ALEXA_ALLOWED_SKILL_ID=<your actual skill ID>
-```
-
-4. Start a path-scoped short-lived tunnel or proxy.
-5. Confirm that the public hostname returns 404 for `/`, `/history`, and `/health`.
-6. Invoke `Alexa, open Brain Slug` on the real Echo.
-7. Ask a low-cost test question.
-8. Confirm the request and answer locally.
-9. Save a sanitized request fixture needed for verification tests.
-10. Stop the tunnel or remove the public route.
-
-Do not use a guessed, permanent, or broadly routed hostname as a substitute for verification.
-
-## Verification-Enabled Test
-
-After full request verification is implemented:
+For all real Alexa tests:
 
 ```text
 ALEXA_VERIFY_REQUESTS=true
 ALEXA_ALLOWED_SKILL_ID=<your actual skill ID>
 ```
 
-Required test cases:
+The verifier uses Alexa's:
 
-- Developer Console test succeeds.
-- Real Echo test succeeds.
-- Tampered request body fails with HTTP 400.
-- Stale timestamp fails.
-- Wrong skill ID fails.
-- Invalid or disallowed certificate URL fails.
-- Public administrative routes remain unreachable.
+```text
+SignatureCertChainUrl
+Signature-256
+```
 
-The endpoint may remain continuously reachable only after these checks pass and rate limits exist.
+and checks the signing certificate, raw-body signature, request timestamp, and application ID before the application service can run.
+
+The Brainslug host must be able to resolve and reach Amazon's signing-certificate URL over HTTPS.
+
+### Verification-disabled mode
+
+This mode exists only for local request fixtures:
+
+```text
+ALEXA_VERIFY_REQUESTS=false
+```
+
+Do not start a public proxy or tunnel in that mode. Disabling verification is not the troubleshooting procedure for a real Alexa request.
+
+## Start Brainslug
+
+Local process:
+
+```powershell
+go run ./cmd/brainslug
+```
+
+Docker:
+
+```powershell
+docker compose up --build -d
+docker compose logs -f brainslug
+```
+
+Administrative health:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8081/health
+```
+
+Confirm:
+
+- status is `ok`;
+- provider and model are correct;
+- Alexa verification is enabled;
+- no credential is returned.
+
+The public port does not serve `/health`.
+
+## Developer Console Test
+
+1. Start the HTTPS route.
+2. Verify public `/`, `/history`, and `/health` return 404.
+3. Open the skill test panel.
+4. Enable testing for the development stage.
+5. Invoke `open Brain Slug`.
+6. Answer the prompt with a low-cost question.
+7. Inspect the local logs and saved history.
+
+Expected flow:
+
+```text
+LaunchRequest
+  -> verification succeeds
+  -> Dialog.Delegate for AskGPTIntent
+
+IntentRequest with Query
+  -> verification succeeds
+  -> synchronous provider request
+  -> concise answer
+```
+
+The current implementation is synchronous. Use a low-latency model or question for the first validation. Slow reasoning may exceed the six-second provider timeout.
+
+## Physical Echo Test
+
+After Developer Console success:
+
+1. Use an Echo signed into the same Alexa account.
+2. Say `Alexa, open Brain Slug`.
+3. Provide a question in the follow-up turn.
+4. Test representative one-shot forms.
+5. Ask for `last response`.
+6. Test help, stop, cancel, fallback, and repeat.
+7. Review Alexa activity history when recognition differs from expectation.
+
+Record the phrases that actually work. Do not infer real-device recognition from JSON validity alone.
+
+## Verification Test Matrix
+
+Code-level tests already cover generated signed requests. Real environment validation should include:
+
+- valid Amazon-signed request;
+- expected skill ID;
+- wrong skill ID;
+- stale captured request;
+- modified body with original signature;
+- absent signature headers;
+- certificate fetch failure;
+- public administrative-route probes.
+
+Do not commit raw user identity, signatures, provider credentials, or private prompt content in fixtures.
 
 ## Voice Test Matrix
 
-### Launch and elicitation
+### Two-turn capture
 
 ```text
 Alexa, open Brain Slug
 ```
 
-Expected target behavior:
+Expected:
 
 ```text
 Brainslug is ready. What should I ask?
 ```
 
-The following full utterance should fill the query slot.
+The follow-up utterance should fill the entire `Query` slot.
 
-### One-shot question
-
-After the interaction-model rewrite:
-
-```text
-Alexa, ask Brain Slug about the halting problem
-Alexa, ask Brain Slug why the sky is blue
-Alexa, tell Brain Slug to explain write-ahead logging
-```
-
-### Fast completion
-
-A low-latency provider response should be spoken in the same turn.
-
-### Deferred completion
-
-A deliberately slow fixture or provider stub should return a pending acknowledgement before Alexa times out. The work should continue under its own deadline.
-
-### Last response
-
-Test all states:
-
-- No previous job.
-- Latest job pending.
-- Latest job completed.
-- Latest job failed.
-
-### Built-in behavior
+### One-shot capture
 
 Test:
 
-- Help.
-- Stop.
-- Cancel.
-- Repeat.
-- Fallback.
-- Session end.
+```text
+Alexa, ask Brain Slug about the halting problem
+Alexa, ask Brain Slug regarding the New Madrid seismic zone
+Alexa, tell Brain Slug to answer this question: why is the sky blue
+```
 
-## Development Versus Distribution
+### Immediate success
 
-Private development requires a working skill attached to the owner's account. It does not require Skill Store publication.
+A provider response that finishes under the configured deadline should be spoken and stored.
 
-Do not begin publication work until the project has:
+### Provider timeout
 
-- Real request verification.
-- Per-user history scoping.
-- Retention and deletion controls.
-- Quotas and a global spend cap.
-- Production hosting.
-- Privacy policy and disclosure of third-party AI processing.
-- Certification-safe content and invocation behavior.
+A slow response should produce the provider-busy message and a redacted error record. It is not deferred; deferred jobs remain future work.
 
-Publication is a separate product decision, not the final checkbox of local setup.
+### Last response
+
+Current behavior:
+
+- no successful history -> no previous response;
+- successful history -> latest nonempty successful answer;
+- history failure -> local history error.
+
+There is no pending-job state yet.
+
+### Built-ins
+
+Test:
+
+- help;
+- stop;
+- cancel;
+- repeat;
+- fallback;
+- session end.
 
 ## Troubleshooting
 
-### Alexa says the endpoint is invalid
+### The interaction model does not build
+
+Use the exact model in `skill/interaction-model.json`. If Amazon rejects a sample or dialog rule, record the console error and commit the corrected model.
+
+### Verification fails immediately
+
+Check local logs for the stable failure category. Common causes include:
+
+- blank or wrong skill ID;
+- missing signature headers;
+- host clock outside the allowed freshness window;
+- outbound DNS or HTTPS failure when retrieving the signing certificate;
+- certificate-chain validation failure;
+- proxy modification of the request body.
+
+Do not return detailed verification diagnostics to the public caller.
+
+### Alexa reports a skill problem after verification
 
 Check:
 
-- HTTPS is valid for the hostname.
-- The endpoint path is exactly `/alexa`.
-- The route is publicly reachable from outside the LAN.
-- The proxy forwards `POST` and the body unchanged.
+- provider key and explicit model;
+- six-second provider deadline;
+- OpenAI incomplete or failed response state;
+- output-token limit exhaustion;
+- SQLite write errors.
 
-### Alexa reports a skill problem immediately
+### Alexa times out
 
-Check local logs for:
+The model did not return inside the synchronous voice budget. Lower latency for initial validation. The long-term fix is the deferred-job phase.
 
-- Verification failure.
-- JSON parsing failure.
-- Provider configuration failure.
-- Provider deadline exceeded.
+### One-shot recognition is poor
 
-Do not return verification diagnostics to the public caller.
+Use the two-turn flow. Then adjust only the smallest set of carrier phrases supported by real activity-history evidence.
 
-### The one-shot phrase sounds wrong
+### The beta is active but absent from Your Skills
 
-That is a known interaction-model defect. Use the two-turn flow and implement the carrier-phrase rewrite in `invocation-design.md`.
+Confirm that the beta invitation was accepted in the iOS or Android Alexa app by the same Amazon consumer account and marketplace registered to the Echo. An identical email address can belong to separate Amazon marketplace accounts; for example, a beta link can authenticate against an Amazon.co.jp account even after the developer used Amazon.com. A Developer Console session therefore does not prove that the mobile Alexa account received the beta entitlement.
 
-### Alexa times out but history later contains an answer
+Add the intended consumer account as a beta tester, open the invitation on the mobile device that has the Alexa app, verify the Amazon marketplace before accepting, and then confirm that Brainslug appears in Your Skills.
 
-The current synchronous path exceeded Alexa's deadline. The correct fix is the deferred-job architecture, not a longer ASK timeout.
+## Development Versus Distribution
 
-### The provider returns no visible text
+A development-stage private skill can be tested on the owner's Alexa account without public Skill Store publication.
 
-The output-token budget may have been consumed by reasoning or thinking tokens. Raise the configured budget or reduce reasoning effort; do not assume the provider returned an empty successful answer without diagnosis.
+Do not begin publication work until Brainslug has:
+
+- real request verification validation;
+- rate limits and global spend control;
+- durable request idempotency;
+- retention and deletion;
+- production hosting;
+- privacy policy and AI-processing disclosure;
+- multi-user isolation;
+- certification-safe content and invocation behavior.
+
+Publication is a separate product decision.

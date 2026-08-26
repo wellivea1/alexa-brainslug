@@ -16,7 +16,11 @@ import (
 	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/alexa"
+	"github.com/wellivea1/alexa-brainslug/internal/app"
 	"github.com/wellivea1/alexa-brainslug/internal/config"
+	"github.com/wellivea1/alexa-brainslug/internal/inference"
+	"github.com/wellivea1/alexa-brainslug/internal/openauth"
+	"github.com/wellivea1/alexa-brainslug/internal/providerauth"
 	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
@@ -24,25 +28,24 @@ import (
 )
 
 // Server timeouts.
-//
-// ReadHeaderTimeout bounds how long a client may dawdle over headers, which
-// is the slowloris defence. WriteTimeout has to exceed the provider timeout
-// or the gateway would cut off its own in-flight answers, so it is derived
-// from the configured provider timeout rather than fixed.
 const (
 	readHeaderTimeout = 5 * time.Second
 	readTimeout       = 15 * time.Second
 	idleTimeout       = 60 * time.Second
 	writeTimeoutSlack = 10 * time.Second
+	adminWriteTimeout = 15 * time.Second
 
-	// shutdownTimeout bounds how long in-flight requests get to finish after
-	// a signal. Alexa gives up at 8 seconds, so anything longer than that is
-	// only for the SQLite write that follows.
+	// shutdownTimeout bounds the combined drain of both listeners.
 	shutdownTimeout = 15 * time.Second
 
 	// maxRequestBodyBytes caps request bodies at the server boundary.
 	maxRequestBodyBytes int64 = 1 << 20
 )
+
+type namedServer struct {
+	name   string
+	server *http.Server
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -53,8 +56,8 @@ func main() {
 
 // run owns the process lifecycle and returns an error instead of exiting, so
 // that every deferred cleanup, including the database handle, actually runs.
-// os.Exit in the middle of startup skips defers; that was a real leak here.
 func run() error {
+	startedAt := time.Now().UTC()
 	if err := config.LoadDotEnv(".env"); err != nil {
 		// Not fatal: the environment may already carry everything needed.
 		slog.Warn("could not load .env", "error", err)
@@ -63,6 +66,10 @@ func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	adminAddr, err := config.LoadAdminServerAddr(cfg.ServerAddr)
+	if err != nil {
+		return fmt.Errorf("invalid listener configuration: %w", err)
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -83,80 +90,156 @@ func run() error {
 		}
 	}()
 
-	provider, err := providers.NewConfigured(cfg, nil)
+	openAIAuth, err := openauth.New(cfg.OpenAI.ChatGPTAuthFile, nil)
+	if err != nil {
+		return fmt.Errorf("configure OpenAI account authentication: %w", err)
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := openAIAuth.Close(closeCtx); err != nil {
+			slog.Warn("close OpenAI callback listener", "error", err)
+		}
+	}()
+
+	provider, err := providers.NewConfigured(&cfg, nil, openAIAuth)
 	if err != nil {
 		return fmt.Errorf("configure provider: %w", err)
 	}
 
-	server := &http.Server{
-		Addr:              cfg.ServerAddr,
-		Handler:           buildHandler(cfg, provider, db),
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      cfg.SelectedTimeout() + writeTimeoutSlack,
-		IdleTimeout:       idleTimeout,
-	}
-
-	errs := make(chan error, 1)
-	go func() {
-		slog.Info("starting Alexa Brainslug",
-			"addr", cfg.ServerAddr,
-			"provider", cfg.Provider,
-			"model", cfg.SelectedModel(),
-			"verify_alexa", cfg.AlexaVerifyRequests,
-			"history", cfg.SaveHistory,
-		)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errs <- err
-		}
-	}()
-
-	select {
-	case err := <-errs:
-		return fmt.Errorf("server failed: %w", err)
-	case <-ctx.Done():
-		slog.Info("shutdown signal received, draining")
-	}
-
-	// A fresh context: the signal already cancelled the one above, and
-	// Shutdown needs a live deadline to drain against.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("graceful shutdown: %w", err)
-	}
-	slog.Info("stopped cleanly")
-	return nil
-}
-
-// buildHandler assembles the route table and the middleware chain.
-//
-// Middleware order matters: the body limit runs before anything reads a body,
-// and request logging wraps everything so that rejected requests are logged
-// too.
-func buildHandler(cfg config.Config, provider providers.Provider, db *store.Store) http.Handler {
-	alexaHandler := alexa.NewHandler(alexa.Options{
+	application := app.NewService(app.Options{
 		Model:           cfg.SelectedModel(),
 		MaxOutputTokens: cfg.SelectedMaxOutputTokens(),
 		SaveHistory:     cfg.SaveHistory,
 		Secrets:         cfg.SecretValues(),
+	}, providers.AsAppProvider(provider), store.AsAppRepository(db))
+	providerManager, err := inference.NewManager(&cfg, application, openAIAuth)
+	if err != nil {
+		return fmt.Errorf("configure inference manager: %w", err)
+	}
+	providerAuth, err := providerauth.New(cfg.ProviderAuthFile)
+	if err != nil {
+		return fmt.Errorf("configure provider credentials: %w", err)
+	}
+	if err := providerManager.AttachAPIKeyStore(providerAuth); err != nil {
+		return fmt.Errorf("apply provider credentials: %w", err)
+	}
+	alexaHandler := alexa.NewHandler(alexa.Options{
 		Verification: alexa.VerificationConfig{
 			VerifyRequests: cfg.AlexaVerifyRequests,
 			AllowedSkillID: cfg.AlexaAllowedSkillID,
 		},
-	}, provider, db)
+	}, application)
 
-	dashboard := web.NewDashboard(db)
+	servers := []namedServer{
+		{
+			name: "ask",
+			server: &http.Server{
+				Addr:              cfg.ServerAddr,
+				Handler:           buildPublicHandler(cfg.PublicBaseURL, alexaHandler),
+				ReadHeaderTimeout: readHeaderTimeout,
+				ReadTimeout:       readTimeout,
+				WriteTimeout:      cfg.SelectedTimeout() + writeTimeoutSlack,
+				IdleTimeout:       idleTimeout,
+			},
+		},
+		{
+			name: "admin",
+			server: &http.Server{
+				Addr:              adminAddr,
+				Handler:           buildAdminHandler(&cfg, providerManager, db, startedAt, openAIAuth),
+				ReadHeaderTimeout: readHeaderTimeout,
+				ReadTimeout:       readTimeout,
+				WriteTimeout:      adminWriteTimeout,
+				IdleTimeout:       idleTimeout,
+			},
+		},
+	}
+
+	errs := make(chan error, len(servers))
+	for _, server := range servers {
+		go serve(server, errs)
+	}
+
+	var serveErr error
+	select {
+	case serveErr = <-errs:
+		slog.Error("server failed, shutting down", "error", serveErr)
+	case <-ctx.Done():
+		slog.Info("shutdown signal received, draining")
+	}
+
+	// A fresh context: the signal may already have canceled the process
+	// context, and Shutdown needs a live deadline to drain against.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	var shutdownErrs []error
+	for _, server := range servers {
+		if err := server.server.Shutdown(shutdownCtx); err != nil {
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown %s server: %w", server.name, err))
+		}
+	}
+	if err := errors.Join(shutdownErrs...); err != nil {
+		return err
+	}
+	if serveErr != nil {
+		return serveErr
+	}
+
+	slog.Info("stopped cleanly")
+	return nil
+}
+
+func serve(server namedServer, errs chan<- error) {
+	slog.Info("starting Alexa Brainslug listener", "listener", server.name, "addr", server.server.Addr)
+	if err := server.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		errs <- fmt.Errorf("%s server: %w", server.name, err)
+	}
+}
+
+// buildPublicHandler registers only the authenticated ASK ingress surface.
+func buildPublicHandler(publicBaseURL string, alexaHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("POST /alexa", alexaHandler)
+
+	return security.RequestLogger(
+		security.Headers(publicBaseURL,
+			security.LimitRequestBody(maxRequestBodyBytes, mux)))
+}
+
+// buildAdminHandler registers local administrative routes on the separate
+// listener. The caller controls binding; the default is host loopback.
+func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time, authentication ...web.OpenAIAuthController) http.Handler {
+	var openAIAuth web.OpenAIAuthController
+	if len(authentication) > 0 {
+		openAIAuth = authentication[0]
+	}
+	dashboard := web.NewDashboard(db, web.Options{
+		Inference:               controller,
+		OpenAIAuth:              openAIAuth,
+		StartedAt:               startedAt,
+		AlexaVerifyRequests:     cfg.AlexaVerifyRequests,
+		HistoryEnabled:          cfg.SaveHistory,
+		PublicBaseURLConfigured: strings.TrimSpace(cfg.PublicBaseURL) != "",
+		SkillIDConfigured:       strings.TrimSpace(cfg.AlexaAllowedSkillID) != "",
+	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(&cfg, provider.Name()))
-	mux.Handle("POST /alexa", alexaHandler)
+	mux.HandleFunc("GET /health", healthHandler(cfg, controller))
 	mux.HandleFunc("GET /history", dashboard.HandleHistory)
+	mux.HandleFunc("GET /assets/dashboard.css", dashboard.HandleStyles)
+	mux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
+	mux.HandleFunc("POST /auth/provider/api-key", dashboard.HandleAPIKeySave)
+	mux.HandleFunc("POST /auth/provider/api-key/remove", dashboard.HandleAPIKeyRemove)
+	mux.HandleFunc("POST /auth/openai/browser", dashboard.HandleOpenAIBrowserStart)
+	mux.HandleFunc("POST /auth/openai/device/start", dashboard.HandleOpenAIDeviceStart)
+	mux.HandleFunc("POST /auth/openai/device/poll", dashboard.HandleOpenAIDevicePoll)
+	mux.HandleFunc("POST /auth/openai/disconnect", dashboard.HandleOpenAIDisconnect)
 	mux.HandleFunc("GET /{$}", dashboard.HandleIndex)
 
 	return security.RequestLogger(
-		security.Headers(cfg.PublicBaseURL,
+		security.Headers("",
 			security.LimitRequestBody(maxRequestBodyBytes, mux)))
 }
 
@@ -165,13 +248,21 @@ func buildHandler(cfg config.Config, provider providers.Provider, db *store.Stor
 // It names the provider and model deliberately: an operator has to be able to
 // confirm which model is answering without reading the process environment.
 // It never reports a credential.
-func healthHandler(cfg *config.Config, providerName string) http.HandlerFunc {
+func healthHandler(cfg *config.Config, controller interface{ Snapshot() inference.Snapshot }) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		snapshot := controller.Snapshot()
+		active := snapshot.OpenAI
+		switch snapshot.ActiveProvider {
+		case config.ProviderOpenAICompatible:
+			active = snapshot.Compatible
+		case config.ProviderAnthropic:
+			active = snapshot.Anthropic
+		}
 		writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 			"status":                     "ok",
 			"service":                    "alexa-brainslug",
-			"provider":                   providerName,
-			"model":                      cfg.SelectedModel(),
+			"provider":                   snapshot.ActiveProvider,
+			"model":                      active.Model,
 			"alexa_request_verification": cfg.AlexaVerifyRequests,
 			"history_enabled":            cfg.SaveHistory,
 			"public_base_url_configured": strings.TrimSpace(cfg.PublicBaseURL) != "",

@@ -37,17 +37,20 @@ RUN chown brainslug:brainslug /app
 
 USER brainslug
 
+# Both processes bind all container interfaces so Docker can publish them. The
+# Compose file binds each published port to host loopback; only the ASK port is
+# intended for a path-scoped reverse proxy.
 ENV SERVER_ADDR=:8080
+ENV ADMIN_SERVER_ADDR=:8081
+
 # The mounted volume. Overriding this from a .env file is the documented way
 # to break a container deployment: see .env.example.
 ENV SQLITE_PATH=/data/brainslug.db
 
-EXPOSE 8080
+EXPOSE 8080 8081
 
-# The health endpoint exercises configuration loading and the provider
-# selection, so a container that answers here has started properly rather
-# than merely bound a port.
+# Health is intentionally served by the private administrative listener.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --quiet --spider --tries=1 http://127.0.0.1:8080/health || exit 1
+    CMD wget --quiet --spider --tries=1 http://127.0.0.1:8081/health || exit 1
 
 ENTRYPOINT ["brainslug"]
