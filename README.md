@@ -180,7 +180,7 @@ To connect a ChatGPT account, open the dashboard and choose
 cannot reach the Brainslug host, including many Docker or remote-shell setups.
 
 > [!NOTE]
-> The ChatGPT connector follows the OpenCode-compatible account flow. It is
+> The ChatGPT connector follows the Codex account flow. It is
 > separate from the documented OpenAI API-key contract, and available models
 > depend on the account.
 
@@ -212,11 +212,6 @@ Alexa, ask Brain Slug about the halting problem
 Alexa, ask Brain Slug regarding SQLite write-ahead logging
 Alexa, tell Brain Slug to answer this question: why is the sky blue
 ```
-
-> [!TIP]
-> If an active beta is missing from **Your Skills**, verify the Amazon
-> marketplace account that accepted the invitation. The same email can belong
-> to separate `.com` and `.co.jp` consumer accounts.
 
 See [Alexa skill setup](docs/alexa-skill-setup.md) for endpoint, beta, and
 device troubleshooting.
