@@ -35,6 +35,8 @@ const (
 	providerOpenAI           = "openai"
 	providerCompatible       = "openai-compatible"
 	providerAnthropic        = "anthropic"
+	schemeHTTP               = "http"
+	schemeHTTPS              = "https"
 )
 
 //go:embed templates/dashboard.html
@@ -244,11 +246,11 @@ func (d *Dashboard) HandleOpenAIBrowserStart(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	authTarget, err := url.Parse(authURL)
-	if err != nil || authTarget.Scheme != "https" || !strings.EqualFold(authTarget.Hostname(), "auth.openai.com") {
+	if err != nil || authTarget.Scheme != schemeHTTPS || !strings.EqualFold(authTarget.Hostname(), "auth.openai.com") {
 		d.renderIndex(w, r, http.StatusBadGateway, "OpenAI login returned an invalid authorization URL.")
 		return
 	}
-	http.Redirect(w, r, authTarget.String(), http.StatusSeeOther) //nolint:gosec // G710: exact HTTPS issuer validated above.
+	http.Redirect(w, r, authTarget.String(), http.StatusSeeOther)
 }
 
 // HandleOpenAIDeviceStart begins the fallback code flow.
@@ -653,9 +655,9 @@ func validatedDashboardOrigin(r *http.Request) (string, error) {
 }
 
 func requestOrigin(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
-		scheme = "https"
+	scheme := schemeHTTP
+	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), schemeHTTPS) {
+		scheme = schemeHTTPS
 	}
 	return scheme + "://" + r.Host
 }
@@ -666,7 +668,7 @@ func parseDashboardOrigin(value string) (*url.URL, bool) {
 		return nil, false
 	}
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+	if parsed.Scheme != schemeHTTP && parsed.Scheme != schemeHTTPS {
 		return nil, false
 	}
 	if parsed.Path != "" && parsed.Path != "/" {
