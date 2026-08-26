@@ -45,29 +45,83 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	if cfg.ServerAddr != ":9090" {
 		t.Fatalf("ServerAddr = %q", cfg.ServerAddr)
 	}
-	if cfg.OpenAI.Model != "gpt-test" {
-		t.Fatalf("OpenAI.Model = %q", cfg.OpenAI.Model)
+	if cfg.Compatible.Model != "gpt-test" {
+		t.Fatalf("Compatible.Model = %q", cfg.Compatible.Model)
 	}
-	if cfg.Provider != "openai" {
+	if cfg.Provider != ProviderOpenAICompatible {
 		t.Fatalf("Provider = %q", cfg.Provider)
 	}
 	if cfg.SelectedModel() != "gpt-test" {
 		t.Fatalf("SelectedModel = %q", cfg.SelectedModel())
 	}
-	if cfg.OpenAI.MaxOutputTokens != 128 {
-		t.Fatalf("MaxOutputTokens = %d", cfg.OpenAI.MaxOutputTokens)
+	if cfg.Compatible.MaxOutputTokens != 128 {
+		t.Fatalf("MaxOutputTokens = %d", cfg.Compatible.MaxOutputTokens)
 	}
-	if cfg.OpenAI.Timeout != 3*time.Second {
-		t.Fatalf("Timeout = %s", cfg.OpenAI.Timeout)
+	if cfg.Compatible.Timeout != 3*time.Second {
+		t.Fatalf("Timeout = %s", cfg.Compatible.Timeout)
 	}
-	if cfg.OpenAI.ReasoningEffort != "high" || cfg.OpenAI.TextVerbosity != "medium" {
-		t.Fatalf("OpenAI response controls = %q/%q", cfg.OpenAI.ReasoningEffort, cfg.OpenAI.TextVerbosity)
+	if cfg.Compatible.ReasoningEffort != "high" || cfg.Compatible.TextVerbosity != "medium" {
+		t.Fatalf("compatible response controls = %q/%q", cfg.Compatible.ReasoningEffort, cfg.Compatible.TextVerbosity)
 	}
 	if cfg.AlexaVerifyRequests {
 		t.Fatal("AlexaVerifyRequests should be false")
 	}
 	if cfg.SaveHistory {
 		t.Fatal("SaveHistory should be false")
+	}
+}
+
+func TestLoadExplicitCompatibleProvider(t *testing.T) {
+	t.Setenv("AI_PROVIDER", ProviderOpenAICompatible)
+	t.Setenv("OPENAI_MODEL", "gpt-official")
+	t.Setenv("OPENAI_COMPATIBLE_API_KEY", "compatible-key")
+	t.Setenv("OPENAI_COMPATIBLE_MODEL", "local-model")
+	t.Setenv("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:11434/v1")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider != ProviderOpenAICompatible || cfg.SelectedModel() != "local-model" {
+		t.Fatalf("selected route = %q/%q", cfg.Provider, cfg.SelectedModel())
+	}
+	if cfg.OpenAI.Model != "gpt-official" || cfg.Compatible.BaseURL != "http://127.0.0.1:11434/v1" {
+		t.Fatalf("separate provider settings = %#v / %#v", cfg.OpenAI, cfg.Compatible)
+	}
+}
+
+func TestLegacyRuntimeSettingsMoveCustomEndpointToCompatible(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.settings.json")
+	legacy := `{
+  "version": 1,
+  "provider": "openai",
+  "openai": {
+    "model": "legacy-local-model",
+    "base_url": "http://127.0.0.1:11434/v1",
+    "max_output_tokens": 256,
+    "timeout_seconds": 6,
+    "reasoning_effort": "",
+    "text_verbosity": ""
+  },
+  "anthropic": {"model":"", "max_output_tokens":4096, "timeout_seconds":6}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("OPENAI_MODEL", "gpt-official")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider != ProviderOpenAICompatible || cfg.Compatible.Model != "legacy-local-model" {
+		t.Fatalf("legacy route = %q/%#v", cfg.Provider, cfg.Compatible)
+	}
+	if cfg.OpenAI.Model != "gpt-official" {
+		t.Fatalf("official OpenAI model was overwritten: %q", cfg.OpenAI.Model)
 	}
 }
 

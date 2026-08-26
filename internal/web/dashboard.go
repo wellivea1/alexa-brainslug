@@ -32,6 +32,7 @@ const (
 	sectionActivity          = "activity"
 	sectionInference         = "inference"
 	providerOpenAI           = "openai"
+	providerCompatible       = "openai-compatible"
 	providerAnthropic        = "anthropic"
 )
 
@@ -401,10 +402,7 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 	if d.inference != nil {
 		inferenceSnapshot = d.inference.Snapshot()
 	}
-	activeProvider := inferenceSnapshot.OpenAI
-	if inferenceSnapshot.ActiveProvider == providerAnthropic {
-		activeProvider = inferenceSnapshot.Anthropic
-	}
+	activeProvider := activeProviderState(&inferenceSnapshot)
 	providerTab := normalizedProviderTab(firstNonEmpty(r.FormValue("provider"), r.URL.Query().Get("provider")), inferenceSnapshot.ActiveProvider)
 	var openAIAuthSnapshot openauth.Snapshot
 	var deviceAuth *openauth.DeviceFlow
@@ -575,14 +573,15 @@ func normalizedSection(value string) string {
 }
 
 func normalizedProviderTab(value, active string) string {
-	if strings.EqualFold(strings.TrimSpace(value), providerAnthropic) {
-		return providerAnthropic
+	for _, provider := range []string{providerOpenAI, providerCompatible, providerAnthropic} {
+		if strings.EqualFold(strings.TrimSpace(value), provider) {
+			return provider
+		}
 	}
-	if strings.EqualFold(strings.TrimSpace(value), providerOpenAI) {
-		return providerOpenAI
-	}
-	if strings.EqualFold(strings.TrimSpace(active), providerAnthropic) {
-		return providerAnthropic
+	for _, provider := range []string{providerCompatible, providerAnthropic} {
+		if strings.EqualFold(strings.TrimSpace(active), provider) {
+			return provider
+		}
 	}
 	return providerOpenAI
 }
@@ -600,13 +599,23 @@ func sectionCopy(section string) (title, description string) {
 
 func normalizedProvider(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == providerAnthropic {
-		return providerAnthropic
-	}
-	if value == providerOpenAI {
-		return providerOpenAI
+	for _, provider := range []string{providerOpenAI, providerCompatible, providerAnthropic} {
+		if value == provider {
+			return provider
+		}
 	}
 	return ""
+}
+
+func activeProviderState(snapshot *inference.Snapshot) inference.ProviderState {
+	switch snapshot.ActiveProvider {
+	case providerCompatible:
+		return snapshot.Compatible
+	case providerAnthropic:
+		return snapshot.Anthropic
+	default:
+		return snapshot.OpenAI
+	}
 }
 
 func sameOrigin(r *http.Request) error {

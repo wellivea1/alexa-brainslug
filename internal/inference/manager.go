@@ -67,6 +67,7 @@ type Snapshot struct {
 	ActiveProvider string
 	SettingsPath   string
 	OpenAI         ProviderState
+	Compatible     ProviderState
 	Anthropic      ProviderState
 }
 
@@ -129,8 +130,9 @@ func (m *Manager) AttachAPIKeyStore(store APIKeyStore) error {
 
 	candidate := m.cfg
 	fallbacks := map[string]apiKeyFallback{
-		config.ProviderOpenAI:    {key: candidate.OpenAI.APIKey, file: candidate.OpenAI.APIKeyFile},
-		config.ProviderAnthropic: {key: candidate.Anthropic.APIKey, file: candidate.Anthropic.APIKeyFile},
+		config.ProviderOpenAI:           {key: candidate.OpenAI.APIKey, file: candidate.OpenAI.APIKeyFile},
+		config.ProviderOpenAICompatible: {key: candidate.Compatible.APIKey, file: candidate.Compatible.APIKeyFile},
+		config.ProviderAnthropic:        {key: candidate.Anthropic.APIKey, file: candidate.Anthropic.APIKeyFile},
 	}
 	managed := make(map[string]bool, 2)
 	if key, ok := store.Get(config.ProviderOpenAI); ok {
@@ -139,6 +141,13 @@ func (m *Manager) AttachAPIKeyStore(store APIKeyStore) error {
 		}
 		candidate.OpenAI.APIKey = strings.TrimSpace(key)
 		managed[config.ProviderOpenAI] = true
+	}
+	if key, ok := store.Get(config.ProviderOpenAICompatible); ok {
+		if err := validateManagedAPIKey(key); err != nil {
+			return fmt.Errorf("stored OpenAI-compatible credential: %w", err)
+		}
+		candidate.Compatible.APIKey = strings.TrimSpace(key)
+		managed[config.ProviderOpenAICompatible] = true
 	}
 	if key, ok := store.Get(config.ProviderAnthropic); ok {
 		if err := validateManagedAPIKey(key); err != nil {
@@ -180,8 +189,8 @@ func (m *Manager) Update(update Update) error {
 	providerID := strings.ToLower(strings.TrimSpace(update.Provider))
 	model := strings.TrimSpace(update.Model)
 	baseURL := strings.TrimSpace(update.BaseURL)
-	if providerID != config.ProviderOpenAI && providerID != config.ProviderAnthropic {
-		return errors.New("provider must be OpenAI or Anthropic")
+	if !supportedProvider(providerID) {
+		return errors.New("provider must be OpenAI, OpenAI-compatible, or Anthropic")
 	}
 	if model == "" {
 		return errors.New("model is required")
@@ -218,6 +227,20 @@ func (m *Manager) Update(update Update) error {
 		}
 		if authMode == config.OpenAIAuthModeChatGPT && (m.chatGPT == nil || !m.chatGPT.Connected()) {
 			return errors.New("ChatGPT account is not connected; connect it before selecting this authentication method")
+		}
+	case config.ProviderOpenAICompatible:
+		candidate.Compatible.AuthMode = config.OpenAIAuthModeAPIKey
+		candidate.Compatible.Model = model
+		candidate.Compatible.BaseURL = baseURL
+		candidate.Compatible.MaxOutputTokens = update.MaxOutputTokens
+		candidate.Compatible.Timeout = time.Duration(update.TimeoutSeconds) * time.Second
+		candidate.Compatible.ReasoningEffort = strings.ToLower(strings.TrimSpace(update.ReasoningEffort))
+		candidate.Compatible.TextVerbosity = strings.ToLower(strings.TrimSpace(update.TextVerbosity))
+		if baseURL == "" {
+			return errors.New("OpenAI-compatible base URL is required")
+		}
+		if strings.TrimSpace(candidate.Compatible.APIKey) == "" {
+			return errors.New("OpenAI-compatible credential is not configured; save an API key here or set OPENAI_COMPATIBLE_API_KEY or OPENAI_COMPATIBLE_API_KEY_FILE")
 		}
 	case config.ProviderAnthropic:
 		candidate.Anthropic.Model = model
@@ -256,8 +279,8 @@ func (m *Manager) Update(update Update) error {
 func (m *Manager) SetAPIKey(providerID, key string) error {
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	key = strings.TrimSpace(key)
-	if providerID != config.ProviderOpenAI && providerID != config.ProviderAnthropic {
-		return errors.New("provider must be OpenAI or Anthropic")
+	if !supportedProvider(providerID) {
+		return errors.New("provider must be OpenAI, OpenAI-compatible, or Anthropic")
 	}
 	if err := validateManagedAPIKey(key); err != nil {
 		return err
@@ -269,9 +292,12 @@ func (m *Manager) SetAPIKey(providerID, key string) error {
 		return errors.New("provider credential storage is unavailable")
 	}
 	candidate := m.cfg
-	if providerID == config.ProviderOpenAI {
+	switch providerID {
+	case config.ProviderOpenAI:
 		candidate.OpenAI.APIKey = key
-	} else {
+	case config.ProviderOpenAICompatible:
+		candidate.Compatible.APIKey = key
+	case config.ProviderAnthropic:
 		candidate.Anthropic.APIKey = key
 	}
 	if err := candidate.Validate(); err != nil {
@@ -302,8 +328,8 @@ func (m *Manager) SetAPIKey(providerID, key string) error {
 // explicit secret-file value present at startup becomes effective again.
 func (m *Manager) ClearAPIKey(providerID string) error {
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
-	if providerID != config.ProviderOpenAI && providerID != config.ProviderAnthropic {
-		return errors.New("provider must be OpenAI or Anthropic")
+	if !supportedProvider(providerID) {
+		return errors.New("provider must be OpenAI, OpenAI-compatible, or Anthropic")
 	}
 
 	m.mu.Lock()
@@ -317,10 +343,14 @@ func (m *Manager) ClearAPIKey(providerID string) error {
 	previous, _ := m.apiKeys.Get(providerID)
 	fallback := m.fallbacks[providerID]
 	candidate := m.cfg
-	if providerID == config.ProviderOpenAI {
+	switch providerID {
+	case config.ProviderOpenAI:
 		candidate.OpenAI.APIKey = fallback.key
 		candidate.OpenAI.APIKeyFile = fallback.file
-	} else {
+	case config.ProviderOpenAICompatible:
+		candidate.Compatible.APIKey = fallback.key
+		candidate.Compatible.APIKeyFile = fallback.file
+	case config.ProviderAnthropic:
 		candidate.Anthropic.APIKey = fallback.key
 		candidate.Anthropic.APIKeyFile = fallback.file
 	}
@@ -394,8 +424,8 @@ func (m *Manager) snapshotFromConfig() Snapshot {
 	}
 	openAICredentialConfigured := strings.TrimSpace(cfg.OpenAI.APIKey) != ""
 	openAICredentialSource := m.credentialSource(config.ProviderOpenAI, cfg.OpenAI.APIKey, cfg.OpenAI.APIKeyFile)
-	openAIEndpoint := openAIEndpointKind(cfg.OpenAI.BaseURL)
-	effectiveOpenAIEndpoint := firstNonEmpty(cfg.OpenAI.BaseURL, openAIDefaultBaseURL)
+	openAIEndpoint := "Official OpenAI Responses API"
+	effectiveOpenAIEndpoint := openAIDefaultBaseURL
 	if openAIAuthMode == config.OpenAIAuthModeChatGPT {
 		openAICredentialConfigured = chatGPTConnected
 		if chatGPTConnected {
@@ -411,7 +441,7 @@ func (m *Manager) snapshotFromConfig() Snapshot {
 		SettingsPath:   cfg.RuntimeSettingsPath,
 		OpenAI: ProviderState{
 			ID:                   config.ProviderOpenAI,
-			Name:                 "OpenAI / compatible",
+			Name:                 "OpenAI",
 			Active:               cfg.Provider == config.ProviderOpenAI,
 			Model:                cfg.OpenAI.Model,
 			BaseURL:              cfg.OpenAI.BaseURL,
@@ -428,6 +458,25 @@ func (m *Manager) snapshotFromConfig() Snapshot {
 			ManagedAPIKey:        m.managedKeys[config.ProviderOpenAI],
 			ReasoningEffort:      cfg.OpenAI.ReasoningEffort,
 			TextVerbosity:        cfg.OpenAI.TextVerbosity,
+		},
+		Compatible: ProviderState{
+			ID:                   config.ProviderOpenAICompatible,
+			Name:                 "OpenAI-compatible",
+			Active:               cfg.Provider == config.ProviderOpenAICompatible,
+			Model:                cfg.Compatible.Model,
+			BaseURL:              cfg.Compatible.BaseURL,
+			EffectiveBaseURL:     cfg.Compatible.BaseURL,
+			EndpointKind:         "Compatible Responses API",
+			MaxOutputTokens:      cfg.Compatible.MaxOutputTokens,
+			TimeoutSeconds:       durationSeconds(cfg.Compatible.Timeout),
+			CredentialConfigured: strings.TrimSpace(cfg.Compatible.APIKey) != "",
+			CredentialSource:     m.credentialSource(config.ProviderOpenAICompatible, cfg.Compatible.APIKey, cfg.Compatible.APIKeyFile),
+			AuthMode:             config.OpenAIAuthModeAPIKey,
+			APIKeyConfigured:     strings.TrimSpace(cfg.Compatible.APIKey) != "",
+			APIKeySource:         m.credentialSource(config.ProviderOpenAICompatible, cfg.Compatible.APIKey, cfg.Compatible.APIKeyFile),
+			ManagedAPIKey:        m.managedKeys[config.ProviderOpenAICompatible],
+			ReasoningEffort:      cfg.Compatible.ReasoningEffort,
+			TextVerbosity:        cfg.Compatible.TextVerbosity,
 		},
 		Anthropic: ProviderState{
 			ID:                   config.ProviderAnthropic,
@@ -498,12 +547,8 @@ func validateBaseURL(value string) error {
 	return nil
 }
 
-func openAIEndpointKind(baseURL string) string {
-	baseURL = strings.TrimRight(strings.ToLower(strings.TrimSpace(baseURL)), "/")
-	if baseURL == "" || baseURL == openAIDefaultBaseURL {
-		return "Official OpenAI Responses API"
-	}
-	return "OpenAI-compatible Responses API"
+func supportedProvider(providerID string) bool {
+	return providerID == config.ProviderOpenAI || providerID == config.ProviderOpenAICompatible || providerID == config.ProviderAnthropic
 }
 
 func credentialSource(apiKey, apiKeyFile string) string {

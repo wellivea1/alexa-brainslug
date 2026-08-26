@@ -14,6 +14,7 @@ const (
 	defaultOpenAIBaseURL = "https://api.openai.com/v1"
 	openAIResponsesPath  = "/responses"
 	openAIName           = "openai"
+	openAICompatibleName = "openai-compatible"
 
 	openAIStatusCompleted  = "completed"
 	openAIStatusIncomplete = "incomplete"
@@ -28,6 +29,9 @@ const (
 // OpenAI calls the OpenAI Responses API.
 type OpenAI struct {
 	ep              endpoint
+	name            string
+	keyName         string
+	modelName       string
 	reasoningEffort string
 	textVerbosity   string
 }
@@ -35,19 +39,33 @@ type OpenAI struct {
 // NewOpenAI builds an OpenAI provider. Passing a nil client uses one with the
 // configured timeout; tests pass their own.
 func NewOpenAI(cfg config.OpenAIConfig, client *http.Client) *OpenAI {
+	return newOpenAI(cfg, openAIName, "OPENAI_API_KEY", "OPENAI_MODEL", client)
+}
+
+// NewOpenAICompatible builds a distinct compatible provider route. It shares
+// the Responses wire format but retains an independent endpoint, model,
+// credential, and provider identity.
+func NewOpenAICompatible(cfg config.OpenAIConfig, client *http.Client) *OpenAI {
+	return newOpenAI(cfg, openAICompatibleName, "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_MODEL", client)
+}
+
+func newOpenAI(cfg config.OpenAIConfig, name, keyName, modelName string, client *http.Client) *OpenAI {
 	return &OpenAI{
 		ep:              newEndpoint(cfg.APIKey, cfg.BaseURL, defaultOpenAIBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
+		name:            name,
+		keyName:         keyName,
+		modelName:       modelName,
 		reasoningEffort: strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort)),
 		textVerbosity:   strings.ToLower(strings.TrimSpace(cfg.TextVerbosity)),
 	}
 }
 
 // Name implements Provider.
-func (p *OpenAI) Name() string { return openAIName }
+func (p *OpenAI) Name() string { return p.name }
 
 // Ask implements Provider.
 func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
-	resolved, err := p.ep.resolve(req, "OPENAI_API_KEY", "OPENAI_MODEL")
+	resolved, err := p.ep.resolve(req, p.keyName, p.modelName)
 	if err != nil {
 		return Response{}, err
 	}
@@ -74,7 +92,7 @@ func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
 		return Response{}, err
 	}
 	if status < http.StatusOK || status > 299 {
-		return Response{}, p.ep.apiError(openAIName, status, decoded.Error.Message)
+		return Response{}, p.ep.apiError(p.name, status, decoded.Error.Message)
 	}
 	if err := decoded.statusError(p.ep); err != nil {
 		return Response{}, err
@@ -89,7 +107,7 @@ func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
 		ShortAnswer:  speech.Summarize(full, spokenWordLimit),
 		FullAnswer:   full,
 		Model:        firstNonEmpty(decoded.Model, resolved.model),
-		ProviderName: openAIName,
+		ProviderName: p.name,
 		Latency:      latency,
 	}, nil
 }

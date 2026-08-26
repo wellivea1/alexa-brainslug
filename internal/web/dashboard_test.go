@@ -238,7 +238,7 @@ func TestHandleIndexRendersInferenceStateWithoutSecrets(t *testing.T) {
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
 		ActiveProvider: "openai",
 		OpenAI: inference.ProviderState{
-			ID: "openai", Name: "OpenAI / compatible", Active: true,
+			ID: "openai", Name: "OpenAI", Active: true,
 			Model: "gpt-5.6-terra", EffectiveBaseURL: "https://api.openai.com/v1",
 			EndpointKind: "Official OpenAI Responses API", CredentialConfigured: true,
 			CredentialSource: "Environment", ReasoningEffort: "low", TextVerbosity: "low",
@@ -270,20 +270,26 @@ func TestHandleIndexRendersInferenceStateWithoutSecrets(t *testing.T) {
 
 func TestHandleIndexUsesOneTabbedProviderPanel(t *testing.T) {
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
-		ActiveProvider: "openai",
-		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI / compatible", Active: true, Model: "gpt-test"},
+		ActiveProvider: "openai-compatible",
+		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI", Model: "gpt-test"},
+		Compatible:     inference.ProviderState{ID: "openai-compatible", Name: "OpenAI-compatible", Active: true, Model: "local-model", BaseURL: "http://127.0.0.1:11434/v1"},
 		Anthropic:      inference.ProviderState{ID: "anthropic", Name: "Anthropic", Model: "claude-test"},
 	}}
 	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, CSRFToken: "test-token"})
 	rec := httptest.NewRecorder()
-	dashboard.HandleIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?section=inference&provider=anthropic", http.NoBody))
+	dashboard.HandleIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?section=inference&provider=openai-compatible", http.NoBody))
 
 	body := rec.Body.String()
-	if !strings.Contains(body, `class="provider-manager"`) || !strings.Contains(body, `id="anthropic-provider-title"`) {
-		t.Fatal("Anthropic provider tab was not rendered in the integrated manager")
+	if !strings.Contains(body, `class="provider-manager"`) || !strings.Contains(body, `id="compatible-provider-title"`) {
+		t.Fatal("compatible provider tab was not rendered in the integrated manager")
 	}
-	if strings.Contains(body, `id="openai-provider-title"`) {
+	if strings.Contains(body, `id="openai-provider-title"`) || strings.Contains(body, `id="anthropic-provider-title"`) {
 		t.Fatal("multiple provider settings panels were rendered at once")
+	}
+	for _, tab := range []string{`provider=openai"`, `provider=openai-compatible"`, `provider=anthropic"`} {
+		if !strings.Contains(body, tab) {
+			t.Errorf("provider manager is missing tab %q", tab)
+		}
 	}
 }
 
@@ -324,7 +330,7 @@ func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
 func TestProviderAPIKeyControlsAreMaskedAndProtected(t *testing.T) {
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
 		ActiveProvider: "openai",
-		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI / compatible", Model: "gpt-test"},
+		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI", Model: "gpt-test"},
 		Anthropic: inference.ProviderState{
 			ID: "anthropic", Name: "Anthropic", Model: "claude-test", ManagedAPIKey: true,
 			CredentialConfigured: true, CredentialSource: "Saved locally",
@@ -447,5 +453,8 @@ func TestHandleStylesServesEmbeddedCSS(t *testing.T) {
 		if strings.Contains(rec.Body.String(), disallowed) {
 			t.Errorf("stylesheet still contains decorative card effect %q", disallowed)
 		}
+	}
+	if strings.Contains(rec.Body.String(), ".metric:first-child { padding-left: 0") || strings.Contains(rec.Body.String(), ".metric:nth-child(odd) { padding-left: 0") {
+		t.Error("overview metric alignment still removes left padding")
 	}
 }

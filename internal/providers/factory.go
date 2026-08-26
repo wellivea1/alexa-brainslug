@@ -31,6 +31,8 @@ func NewConfigured(cfg *config.Config, client *http.Client, chatGPT ...ChatGPTCr
 			return NewChatGPT(cfg.OpenAI, credentials, client), nil
 		}
 		return NewOpenAI(cfg.OpenAI, client), nil
+	case config.ProviderOpenAICompatible:
+		return NewOpenAICompatible(cfg.Compatible, client), nil
 	case config.ProviderAnthropic:
 		return NewAnthropic(cfg.Anthropic, client), nil
 	default:

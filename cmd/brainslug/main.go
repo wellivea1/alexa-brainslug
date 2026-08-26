@@ -252,7 +252,10 @@ func healthHandler(cfg *config.Config, controller interface{ Snapshot() inferenc
 	return func(w http.ResponseWriter, r *http.Request) {
 		snapshot := controller.Snapshot()
 		active := snapshot.OpenAI
-		if snapshot.ActiveProvider == config.ProviderAnthropic {
+		switch snapshot.ActiveProvider {
+		case config.ProviderOpenAICompatible:
+			active = snapshot.Compatible
+		case config.ProviderAnthropic:
 			active = snapshot.Anthropic
 		}
 		writeJSON(r.Context(), w, http.StatusOK, map[string]any{

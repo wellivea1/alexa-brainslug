@@ -293,6 +293,7 @@ func TestNewConfiguredSelectsProvider(t *testing.T) {
 		wantErr  bool
 	}{
 		{config.ProviderOpenAI, openAIName, false},
+		{config.ProviderOpenAICompatible, openAICompatibleName, false},
 		{config.ProviderAnthropic, anthropicName, false},
 		{"opencode", "", true},
 		{"", "", true},
@@ -301,9 +302,10 @@ func TestNewConfiguredSelectsProvider(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
 			cfg := config.Config{
-				Provider:  tt.provider,
-				OpenAI:    config.OpenAIConfig{Model: "m", APIKey: "k"},
-				Anthropic: config.AnthropicConfig{Model: "m", APIKey: "k"},
+				Provider:   tt.provider,
+				OpenAI:     config.OpenAIConfig{Model: "m", APIKey: "k"},
+				Compatible: config.OpenAIConfig{Model: "m", APIKey: "k", BaseURL: "https://compatible.example/v1"},
+				Anthropic:  config.AnthropicConfig{Model: "m", APIKey: "k"},
 			}
 			got, err := NewConfigured(&cfg, http.DefaultClient)
 

@@ -140,8 +140,7 @@ SAVE_HISTORY=true
 `OPENAI_MAX_OUTPUT_TOKENS` is reasoning and output headroom, not a desired answer length. Reasoning models may consume the same budget before producing visible text.
 
 Leave `OPENAI_REASONING_EFFORT` and `OPENAI_TEXT_VERBOSITY` unset to use the
-provider default. This is the safest choice for OpenAI-compatible endpoints
-that do not implement those OpenAI-specific request controls.
+provider default.
 
 Set the real skill ID before testing:
 
@@ -175,21 +174,31 @@ You may set `OPENAI_API_KEY_FILE` instead of `OPENAI_API_KEY`. The file should c
 OpenAI has two deliberately separate credential paths:
 
 - `api_key` calls the documented [OpenAI API](https://developers.openai.com/api/reference/overview)
-  (or an explicitly
-  configured compatible endpoint) with `OPENAI_API_KEY` or
-  `OPENAI_API_KEY_FILE`.
+  with `OPENAI_API_KEY` or `OPENAI_API_KEY_FILE`.
 - `chatgpt` calls the account-scoped Codex Responses transport with a locally
   connected ChatGPT Plus/Pro account. [OpenCode documents this account login](https://opencode.ai/docs/providers/#openai),
   but it is not the standard OpenAI API-key contract and available models are
   controlled by the account.
 
 To connect a ChatGPT account, open `http://127.0.0.1:8081/`, choose
-**Inference → OpenAI / compatible**, and use **Connect**. Browser login opens a
+**Inference → OpenAI**, and use **Connect**. Browser login opens a
 short-lived callback on host loopback port `1455`; do not forward that port.
 Use **Use code** when running in Docker or when the browser callback cannot
 reach the Brainslug host. After sign-in, select **ChatGPT account**, choose an
 account-supported model, and save settings. Brainslug does not silently change
 the configured model.
+
+OpenAI-compatible example:
+
+```text
+AI_PROVIDER=openai-compatible
+OPENAI_COMPATIBLE_API_KEY=local-or-gateway-key
+OPENAI_COMPATIBLE_MODEL=qwen2.5:0.5b
+OPENAI_COMPATIBLE_BASE_URL=http://127.0.0.1:11434/v1
+```
+
+The compatible route has its own dashboard tab and persisted settings. It does
+not overwrite the official OpenAI model, credential mode, or request controls.
 
 Anthropic example:
 
@@ -232,7 +241,8 @@ Those keys live in `brainslug.provider-auth.json` beside SQLite by default, or
 at `PROVIDER_AUTH_FILE`, with owner-only permissions where the platform
 supports them. A saved local key takes precedence while present; removing it
 reveals any `OPENAI_API_KEY`, `OPENAI_API_KEY_FILE`, `ANTHROPIC_API_KEY`, or
-`ANTHROPIC_API_KEY_FILE` value loaded at startup.
+`ANTHROPIC_API_KEY_FILE` value loaded at startup. The compatible tab similarly
+uses `OPENAI_COMPATIBLE_API_KEY` or `OPENAI_COMPATIBLE_API_KEY_FILE`.
 
 A connected ChatGPT account is stored separately in
 `brainslug.openai-auth.json` beside SQLite by default, or at
@@ -240,11 +250,10 @@ A connected ChatGPT account is stored separately in
 keep both auth files private and never commit or copy them casually. The
 dashboard exposes only connection state and a generic credential source.
 
-The model manager keeps OpenAI-compatible and Anthropic configuration in one
-panel with a provider tab for each. Provider and model selection stay
-explicit: Brainslug never guesses, falls back, or silently substitutes a
-different model. A custom OpenAI base URL is labeled as compatible rather than
-official OpenAI.
+The model manager keeps OpenAI, OpenAI-compatible, and Anthropic configuration
+in one panel with a separate provider tab and persisted settings for each.
+Provider and model selection stay explicit: Brainslug never falls back or
+silently substitutes a different model.
 
 Anthropic uses the direct Claude Messages API at `POST /v1/messages` with an
 Anthropic Console API key. Brainslug does not repurpose a Claude Pro or Max

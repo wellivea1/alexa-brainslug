@@ -83,7 +83,9 @@ http://127.0.0.1:8081/history
 ```
 
 Use the Inference page to change the explicit provider, model, endpoint, token
-cap, timeout, and supported OpenAI reasoning/text controls without restarting.
+cap, timeout, and supported reasoning/text controls without restarting.
+OpenAI, OpenAI-compatible, and Anthropic have separate tabs and persisted
+settings, so switching routes does not overwrite another provider.
 Non-secret settings persist beside SQLite by default; override the location
 with `RUNTIME_SETTINGS_PATH`. Each provider tab also accepts a masked API key.
 The saved value is never displayed again and persists in

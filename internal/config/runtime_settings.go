@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	runtimeSettingsVersion = 1
+	runtimeSettingsVersion = 2
+	legacySettingsVersion  = 1
 	inMemorySQLitePath     = ":memory:"
 )
 
@@ -20,10 +21,11 @@ const (
 // dedicated provider auth file, environment variables, or explicit secret
 // files.
 type RuntimeSettings struct {
-	Version   int                     `json:"version"`
-	Provider  string                  `json:"provider"`
-	OpenAI    OpenAIRuntimeSettings   `json:"openai"`
-	Anthropic ProviderRuntimeSettings `json:"anthropic"`
+	Version    int                     `json:"version"`
+	Provider   string                  `json:"provider"`
+	OpenAI     OpenAIRuntimeSettings   `json:"openai"`
+	Compatible OpenAIRuntimeSettings   `json:"openai_compatible,omitempty"`
+	Anthropic  ProviderRuntimeSettings `json:"anthropic"`
 }
 
 // ProviderRuntimeSettings contains settings shared by inference providers.
@@ -58,6 +60,17 @@ func RuntimeSettingsFromConfig(cfg *Config) RuntimeSettings {
 			AuthMode:        cfg.OpenAI.AuthMode,
 			ReasoningEffort: cfg.OpenAI.ReasoningEffort,
 			TextVerbosity:   cfg.OpenAI.TextVerbosity,
+		},
+		Compatible: OpenAIRuntimeSettings{
+			ProviderRuntimeSettings: ProviderRuntimeSettings{
+				Model:           cfg.Compatible.Model,
+				BaseURL:         cfg.Compatible.BaseURL,
+				MaxOutputTokens: cfg.Compatible.MaxOutputTokens,
+				TimeoutSeconds:  durationSeconds(cfg.Compatible.Timeout),
+			},
+			AuthMode:        OpenAIAuthModeAPIKey,
+			ReasoningEffort: cfg.Compatible.ReasoningEffort,
+			TextVerbosity:   cfg.Compatible.TextVerbosity,
 		},
 		Anthropic: ProviderRuntimeSettings{
 			Model:           cfg.Anthropic.Model,
@@ -110,10 +123,14 @@ func (c *Config) applyRuntimeSettingsFile() error {
 	if err := decoder.Decode(&settings); err != nil {
 		return fmt.Errorf("decode runtime settings: %w", err)
 	}
-	if settings.Version != runtimeSettingsVersion {
-		return fmt.Errorf("runtime settings version must be %d", runtimeSettingsVersion)
+	if settings.Version != legacySettingsVersion && settings.Version != runtimeSettingsVersion {
+		return fmt.Errorf("runtime settings version must be %d or %d", legacySettingsVersion, runtimeSettingsVersion)
 	}
-	c.applyRuntimeSettings(settings)
+	if settings.Version == legacySettingsVersion {
+		c.applyLegacyRuntimeSettings(settings)
+	} else {
+		c.applyRuntimeSettings(settings)
+	}
 	return nil
 }
 
@@ -130,6 +147,32 @@ func (c *Config) applyRuntimeSettings(settings RuntimeSettings) {
 	// OpenAI's reasoning or text-verbosity request extensions.
 	c.OpenAI.ReasoningEffort = strings.ToLower(strings.TrimSpace(settings.OpenAI.ReasoningEffort))
 	c.OpenAI.TextVerbosity = strings.ToLower(strings.TrimSpace(settings.OpenAI.TextVerbosity))
+	applyProviderRuntime(&c.Compatible.Model, &c.Compatible.BaseURL, &c.Compatible.MaxOutputTokens, &c.Compatible.Timeout, settings.Compatible.ProviderRuntimeSettings)
+	c.Compatible.AuthMode = OpenAIAuthModeAPIKey
+	c.Compatible.ReasoningEffort = strings.ToLower(strings.TrimSpace(settings.Compatible.ReasoningEffort))
+	c.Compatible.TextVerbosity = strings.ToLower(strings.TrimSpace(settings.Compatible.TextVerbosity))
+	applyProviderRuntime(&c.Anthropic.Model, &c.Anthropic.BaseURL, &c.Anthropic.MaxOutputTokens, &c.Anthropic.Timeout, settings.Anthropic)
+}
+
+func (c *Config) applyLegacyRuntimeSettings(settings RuntimeSettings) {
+	provider := strings.ToLower(strings.TrimSpace(settings.Provider))
+	if provider == ProviderOpenAI && isCustomOpenAIBaseURL(settings.OpenAI.BaseURL) {
+		c.Provider = ProviderOpenAICompatible
+		applyProviderRuntime(&c.Compatible.Model, &c.Compatible.BaseURL, &c.Compatible.MaxOutputTokens, &c.Compatible.Timeout, settings.OpenAI.ProviderRuntimeSettings)
+		c.Compatible.AuthMode = OpenAIAuthModeAPIKey
+		c.Compatible.ReasoningEffort = strings.ToLower(strings.TrimSpace(settings.OpenAI.ReasoningEffort))
+		c.Compatible.TextVerbosity = strings.ToLower(strings.TrimSpace(settings.OpenAI.TextVerbosity))
+	} else {
+		if provider != "" {
+			c.Provider = provider
+		}
+		applyProviderRuntime(&c.OpenAI.Model, &c.OpenAI.BaseURL, &c.OpenAI.MaxOutputTokens, &c.OpenAI.Timeout, settings.OpenAI.ProviderRuntimeSettings)
+		if authMode := strings.ToLower(strings.TrimSpace(settings.OpenAI.AuthMode)); authMode != "" {
+			c.OpenAI.AuthMode = authMode
+		}
+		c.OpenAI.ReasoningEffort = strings.ToLower(strings.TrimSpace(settings.OpenAI.ReasoningEffort))
+		c.OpenAI.TextVerbosity = strings.ToLower(strings.TrimSpace(settings.OpenAI.TextVerbosity))
+	}
 	applyProviderRuntime(&c.Anthropic.Model, &c.Anthropic.BaseURL, &c.Anthropic.MaxOutputTokens, &c.Anthropic.Timeout, settings.Anthropic)
 }
 

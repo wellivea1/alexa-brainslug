@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{{.PageTitle}} · Brainslug</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=5">
+  <link rel="stylesheet" href="/assets/dashboard.css?v=9">
 </head>
 <body>
   <div class="app-shell">
@@ -113,7 +113,7 @@
               <a class="text-link" href="/?section=inference">Manage</a>
             </div>
             <div class="model-lockup">
-              <span class="provider-monogram">{{if eq .ActiveProvider.ID "openai"}}O{{else}}A{{end}}</span>
+              <span class="provider-monogram {{if eq .ActiveProvider.ID "openai-compatible"}}provider-monogram-compatible{{else if eq .ActiveProvider.ID "anthropic"}}provider-monogram-alt{{end}}">{{if eq .ActiveProvider.ID "openai"}}O{{else if eq .ActiveProvider.ID "openai-compatible"}}C{{else}}A{{end}}</span>
               <div><strong>{{.ActiveProvider.Model}}</strong><span>{{.ActiveProvider.EndpointKind}}</span></div>
             </div>
             <dl class="detail-list">
@@ -158,7 +158,7 @@
             <input type="hidden" name="section" value="activity">
             <label class="search-field"><span class="sr-only">Search activity</span><input type="search" name="query" value="{{.Query}}" placeholder="Search prompts, answers, models…"></label>
             <label><span class="sr-only">Filter by status</span><select name="status"><option value="all">All statuses</option><option value="ok" {{if eq .StatusFilter "ok"}}selected{{end}}>Successful</option><option value="error" {{if eq .StatusFilter "error"}}selected{{end}}>Errors</option></select></label>
-            <label><span class="sr-only">Filter by provider</span><select name="provider_filter"><option value="all">All providers</option><option value="openai" {{if eq .ProviderFilter "openai"}}selected{{end}}>OpenAI / compatible</option><option value="anthropic" {{if eq .ProviderFilter "anthropic"}}selected{{end}}>Anthropic</option></select></label>
+            <label><span class="sr-only">Filter by provider</span><select name="provider_filter"><option value="all">All providers</option><option value="openai" {{if eq .ProviderFilter "openai"}}selected{{end}}>OpenAI</option><option value="openai-compatible" {{if eq .ProviderFilter "openai-compatible"}}selected{{end}}>OpenAI-compatible</option><option value="anthropic" {{if eq .ProviderFilter "anthropic"}}selected{{end}}>Anthropic</option></select></label>
             <button class="button button-primary" type="submit">Filter</button>
             {{if or .Query .StatusFilter .ProviderFilter}}<a class="button button-quiet" href="/?section=activity">Clear</a>{{end}}
           </form>
@@ -205,7 +205,8 @@
           </header>
 
           <nav class="provider-tabs" aria-label="Inference providers" role="tablist">
-            <a href="/?section=inference&amp;provider=openai" role="tab" aria-selected="{{if eq .ProviderTab "openai"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai"}}aria-current="page"{{end}}>OpenAI / compatible{{if .Inference.OpenAI.Active}}<span>Active</span>{{end}}</a>
+            <a href="/?section=inference&amp;provider=openai" role="tab" aria-selected="{{if eq .ProviderTab "openai"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai"}}aria-current="page"{{end}}>OpenAI{{if .Inference.OpenAI.Active}}<span>Active</span>{{end}}</a>
+            <a href="/?section=inference&amp;provider=openai-compatible" role="tab" aria-selected="{{if eq .ProviderTab "openai-compatible"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai-compatible"}}aria-current="page"{{end}}>Compatible{{if .Inference.Compatible.Active}}<span>Active</span>{{end}}</a>
             <a href="/?section=inference&amp;provider=anthropic" role="tab" aria-selected="{{if eq .ProviderTab "anthropic"}}true{{else}}false{{end}}" {{if eq .ProviderTab "anthropic"}}aria-current="page"{{end}}>Anthropic{{if .Inference.Anthropic.Active}}<span>Active</span>{{end}}</a>
           </nav>
 
@@ -214,7 +215,7 @@
             <aside class="provider-context">
               <div class="provider-identity">
                 <span class="provider-monogram" aria-hidden="true">O</span>
-                <span><h3 id="openai-provider-title">OpenAI / compatible</h3><small>{{.Inference.OpenAI.EndpointKind}}</small></span>
+                <span><h3 id="openai-provider-title">OpenAI</h3><small>{{.Inference.OpenAI.EndpointKind}}</small></span>
               </div>
               <div class="provider-health">
                 <span class="health-icon {{if .Inference.OpenAI.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
@@ -255,21 +256,66 @@
               <section class="form-section" aria-labelledby="openai-model-title">
                 <header class="form-section-head"><div><strong id="openai-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
                 <div class="form-rows">
-                  <label class="field"><span>Model</span><span class="field-control"><input name="model" list="openai-models" value="{{.Inference.OpenAI.Model}}" required autocomplete="off"><small>Suggested model or exact compatible model ID.</small></span></label>
-                  <label class="field"><span>Base URL</span><span class="field-control"><input type="url" name="base_url" value="{{.Inference.OpenAI.BaseURL}}" placeholder="https://api.openai.com/v1"><small>Used only in API-key mode; blank selects the official endpoint.</small></span></label>
+                  <label class="field"><span>Model</span><span class="field-control"><input name="model" list="openai-models" value="{{.Inference.OpenAI.Model}}" required autocomplete="off"><small>Suggested model or exact OpenAI model ID.</small></span></label>
                 </div>
               </section>
               <datalist id="openai-models">{{range .OpenAIModels}}<option value="{{.ID}}">{{.Name}} — {{.Description}}</option>{{end}}</datalist>
               <details class="advanced-settings">
                 <summary>Request settings</summary>
                 <div class="form-rows advanced-grid">
-                  <label class="field"><span>Reasoning effort</span><span class="field-control"><select name="reasoning_effort"><option value="" {{if eq .Inference.OpenAI.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.OpenAI.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.OpenAI.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.OpenAI.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.OpenAI.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select><small>Provider default is safest for compatible endpoints.</small></span></label>
+                  <label class="field"><span>Reasoning effort</span><span class="field-control"><select name="reasoning_effort"><option value="" {{if eq .Inference.OpenAI.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.OpenAI.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.OpenAI.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.OpenAI.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.OpenAI.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select></span></label>
                   <label class="field"><span>Text verbosity</span><span class="field-control"><select name="text_verbosity"><option value="" {{if eq .Inference.OpenAI.TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .Inference.OpenAI.TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.TextVerbosity "high"}}selected{{end}}>High</option></select></span></label>
                   <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.OpenAI.MaxOutputTokens}}" required></span></label>
                   <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.OpenAI.TimeoutSeconds}}" required></span></label>
                 </div>
               </details>
               <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.OpenAI.Active}}Save settings{{else}}Use OpenAI{{end}}</button></div>
+            </form>
+          </div>
+          {{else if eq .ProviderTab "openai-compatible"}}
+          <div class="provider-panel" role="tabpanel" aria-labelledby="compatible-provider-title">
+            <aside class="provider-context">
+              <div class="provider-identity">
+                <span class="provider-monogram provider-monogram-compatible" aria-hidden="true">C</span>
+                <span><h3 id="compatible-provider-title">OpenAI-compatible</h3><small>{{.Inference.Compatible.EndpointKind}}</small></span>
+              </div>
+              <div class="provider-health">
+                <span class="health-icon {{if .Inference.Compatible.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
+                <span><strong>{{if .Inference.Compatible.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.Compatible.CredentialSource}}</small></span>
+              </div>
+            </aside>
+            <form class="provider-form" method="post" action="/settings/provider">
+              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+              <input type="hidden" name="section" value="inference">
+              <input type="hidden" name="provider" value="openai-compatible">
+              <input type="hidden" name="auth_mode" value="api_key">
+              <section class="form-section" aria-labelledby="compatible-auth-title">
+                <header class="form-section-head"><div><strong id="compatible-auth-title">Authentication</strong><small>Credential for this compatible endpoint.</small></div></header>
+                <div class="api-key-editor">
+                  <label class="field" for="compatible-api-key"><span>API key</span><span class="field-control"><input id="compatible-api-key" type="password" name="api_key" placeholder="Paste a new API key" autocomplete="new-password"><small>{{.Inference.Compatible.CredentialSource}} · the saved value is never displayed again.</small></span></label>
+                  <span class="auth-actions">
+                    <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/provider/api-key">Save key</button>
+                    {{if .Inference.Compatible.ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
+                  </span>
+                </div>
+              </section>
+              <section class="form-section" aria-labelledby="compatible-model-title">
+                <header class="form-section-head"><div><strong id="compatible-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
+                <div class="form-rows">
+                  <label class="field"><span>Model</span><span class="field-control"><input name="model" value="{{.Inference.Compatible.Model}}" placeholder="model-id" required autocomplete="off"><small>Use the exact model ID exposed by the server.</small></span></label>
+                  <label class="field"><span>Base URL</span><span class="field-control"><input type="url" name="base_url" value="{{.Inference.Compatible.BaseURL}}" placeholder="http://127.0.0.1:11434/v1" required><small>Responses-compatible API root, including <code>/v1</code> when required.</small></span></label>
+                </div>
+              </section>
+              <details class="advanced-settings">
+                <summary>Request settings</summary>
+                <div class="form-rows advanced-grid">
+                  <label class="field"><span>Reasoning effort</span><span class="field-control"><select name="reasoning_effort"><option value="" {{if eq .Inference.Compatible.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.Compatible.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.Compatible.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.Compatible.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.Compatible.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.Compatible.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.Compatible.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select><small>Leave at provider default unless the server documents support.</small></span></label>
+                  <label class="field"><span>Text verbosity</span><span class="field-control"><select name="text_verbosity"><option value="" {{if eq .Inference.Compatible.TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .Inference.Compatible.TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.Compatible.TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.Compatible.TextVerbosity "high"}}selected{{end}}>High</option></select></span></label>
+                  <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.Compatible.MaxOutputTokens}}" required></span></label>
+                  <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.Compatible.TimeoutSeconds}}" required></span></label>
+                </div>
+              </details>
+              <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.Compatible.Active}}Save settings{{else}}Use compatible{{end}}</button></div>
             </form>
           </div>
           {{else}}

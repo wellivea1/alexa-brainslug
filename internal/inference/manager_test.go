@@ -46,7 +46,7 @@ func (stubProvider) Ask(_ context.Context, _ app.ProviderRequest) (app.ProviderR
 	return app.ProviderResponse{}, nil
 }
 
-func TestManagerUpdatePersistsNonSecretSettings(t *testing.T) {
+func TestManagerUpdatePersistsSeparateCompatibleSettings(t *testing.T) {
 	settingsPath := filepath.Join(t.TempDir(), "brainslug.settings.json")
 	cfg := testConfig(settingsPath)
 	service := app.NewService(app.Options{Model: cfg.OpenAI.Model}, stubProvider{}, nil)
@@ -56,7 +56,7 @@ func TestManagerUpdatePersistsNonSecretSettings(t *testing.T) {
 	}
 
 	err = manager.Update(Update{
-		Provider:        config.ProviderOpenAI,
+		Provider:        config.ProviderOpenAICompatible,
 		Model:           "gpt-5.6-luna",
 		BaseURL:         "https://gateway.example/v1",
 		MaxOutputTokens: 4096,
@@ -69,15 +69,15 @@ func TestManagerUpdatePersistsNonSecretSettings(t *testing.T) {
 	}
 
 	snapshot := manager.Snapshot()
-	if snapshot.OpenAI.Model != "gpt-5.6-luna" || snapshot.OpenAI.EndpointKind != "OpenAI-compatible Responses API" {
-		t.Fatalf("snapshot = %#v", snapshot.OpenAI)
+	if snapshot.Compatible.Model != "gpt-5.6-luna" || snapshot.Compatible.EndpointKind != "Compatible Responses API" {
+		t.Fatalf("snapshot = %#v", snapshot.Compatible)
 	}
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
 	text := string(data)
-	if strings.Contains(text, "secret-value") {
+	if strings.Contains(text, "secret-value") || strings.Contains(text, "compatible-secret") {
 		t.Fatal("runtime settings persisted a credential")
 	}
 	if !strings.Contains(text, "gpt-5.6-luna") || !strings.Contains(text, "\"reasoning_effort\": \"none\"") {
@@ -220,6 +220,57 @@ func TestManagedAnthropicAPIKeyReachesOfficialMessagesTransport(t *testing.T) {
 	}
 }
 
+func TestCompatibleRouteKeepsItsOwnCredentialAndProviderIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("compatible path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer compatible-managed" {
+			t.Errorf("compatible authorization header was not supplied")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "local-model", "status": "completed", "output_text": "Compatible route works.",
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	cfg := testConfig(settingsPath)
+	cfg.Compatible.APIKey = ""
+	service := app.NewService(app.Options{Model: cfg.OpenAI.Model}, stubProvider{}, nil)
+	manager, err := NewManager(&cfg, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := &memoryAPIKeyStore{keys: make(map[string]string)}
+	if err := manager.AttachAPIKeyStore(credentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetAPIKey(config.ProviderOpenAICompatible, "compatible-managed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Update(Update{
+		Provider: config.ProviderOpenAICompatible, Model: "local-model", BaseURL: server.URL + "/v1",
+		MaxOutputTokens: 128, TimeoutSeconds: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	answer, err := service.Ask(t.Context(), app.AskRequest{
+		Principal: app.Principal{Namespace: "test", Subject: "compatible-route"}, Prompt: "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.FullAnswer != "Compatible route works." || answer.Provider != config.ProviderOpenAICompatible {
+		t.Fatalf("answer = %#v", answer)
+	}
+	snapshot := manager.Snapshot()
+	if !snapshot.Compatible.Active || snapshot.OpenAI.Active || snapshot.Compatible.CredentialSource != "Saved locally" {
+		t.Fatalf("separate compatible state = %#v", snapshot)
+	}
+}
+
 func testConfig(settingsPath string) config.Config {
 	return config.Config{
 		ServerAddr:          "127.0.0.1:8080",
@@ -231,6 +282,10 @@ func testConfig(settingsPath string) config.Config {
 		OpenAI: config.OpenAIConfig{
 			APIKey: "secret-value", Model: "gpt-5.6-terra", MaxOutputTokens: 25000,
 			Timeout: 6 * time.Second, ReasoningEffort: "low", TextVerbosity: "low",
+		},
+		Compatible: config.OpenAIConfig{
+			APIKey: "compatible-secret", Model: "compatible-model", BaseURL: "http://127.0.0.1:11434/v1", MaxOutputTokens: 4096,
+			Timeout: 6 * time.Second,
 		},
 		Anthropic: config.AnthropicConfig{
 			APIKey: "anthropic-secret", Model: "claude-test", MaxOutputTokens: 4096,
