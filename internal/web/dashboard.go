@@ -11,6 +11,7 @@ import (
 	"errors"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -231,7 +232,12 @@ func (d *Dashboard) HandleOpenAIBrowserStart(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "OpenAI account login is unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	returnURL := "http://" + r.Host + "/?section=inference&provider=openai"
+	dashboardOrigin, err := validatedDashboardOrigin(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	returnURL := dashboardOrigin + "/?section=inference&provider=openai"
 	authURL, err := d.openAIAuth.StartBrowser(returnURL)
 	if err != nil {
 		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
@@ -619,15 +625,70 @@ func activeProviderState(snapshot *inference.Snapshot) inference.ProviderState {
 }
 
 func sameOrigin(r *http.Request) error {
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		return nil
+	_, err := validatedDashboardOrigin(r)
+	return err
+}
+
+// validatedDashboardOrigin returns the browser-visible origin after enforcing
+// the dashboard's same-origin boundary. Loopback aliases and ports are treated
+// as one local security boundary so host port forwarding does not turn a local
+// form submission into a false cross-origin rejection.
+func validatedDashboardOrigin(r *http.Request) (string, error) {
+	requestOrigin, ok := parseDashboardOrigin(requestOrigin(r))
+	if !ok {
+		return "", errors.New("cross-origin dashboard update rejected")
 	}
-	parsed, err := url.Parse(origin)
-	if err != nil || !strings.EqualFold(parsed.Host, r.Host) {
-		return errors.New("cross-origin dashboard update rejected")
+	originHeader := strings.TrimSpace(r.Header.Get("Origin"))
+	if originHeader == "" {
+		return requestOrigin.String(), nil
 	}
-	return nil
+	origin, ok := parseDashboardOrigin(originHeader)
+	if !ok {
+		return "", errors.New("cross-origin dashboard update rejected")
+	}
+	if strings.EqualFold(origin.String(), requestOrigin.String()) || sameLoopbackOrigin(origin, requestOrigin) {
+		return origin.String(), nil
+	}
+	return "", errors.New("cross-origin dashboard update rejected")
+}
+
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func parseDashboardOrigin(value string) (*url.URL, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, false
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, false
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return nil, false
+	}
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = ""
+	parsed.RawPath = ""
+	return parsed, true
+}
+
+func sameLoopbackOrigin(left, right *url.URL) bool {
+	return left.Scheme == right.Scheme && isLoopbackHost(left.Hostname()) && isLoopbackHost(right.Hostname())
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (d *Dashboard) authorizeMutation(w http.ResponseWriter, r *http.Request) bool {

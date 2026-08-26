@@ -403,14 +403,14 @@ func TestOpenAIAccountControlsRenderAndMutationsRequireCSRF(t *testing.T) {
 	form := url.Values{"csrf_token": {"test-token"}}
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/browser", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", "http://127.0.0.1:8081")
+	req.Header.Set("Origin", "http://127.0.0.1:18081")
 	req.Host = "127.0.0.1:8081"
 	rec = httptest.NewRecorder()
 	dashboard.HandleOpenAIBrowserStart(rec, req)
 	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "https://auth.openai.com/") {
 		t.Fatalf("browser login response = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
-	if authentication.returnURL != "http://127.0.0.1:8081/?section=inference&provider=openai" {
+	if authentication.returnURL != "http://127.0.0.1:18081/?section=inference&provider=openai" {
 		t.Fatalf("return URL = %q", authentication.returnURL)
 	}
 
@@ -419,6 +419,38 @@ func TestOpenAIAccountControlsRenderAndMutationsRequireCSRF(t *testing.T) {
 	dashboard.HandleOpenAIBrowserStart(badRec, bad)
 	if badRec.Code != http.StatusForbidden {
 		t.Fatalf("missing CSRF status = %d", badRec.Code)
+	}
+}
+
+func TestSameOriginAllowsOnlyEquivalentLoopbackMappings(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		origin  string
+		allowed bool
+	}{
+		{name: "exact origin", host: "127.0.0.1:8081", origin: "http://127.0.0.1:8081", allowed: true},
+		{name: "forwarded loopback port", host: "127.0.0.1:8081", origin: "http://127.0.0.1:18081", allowed: true},
+		{name: "loopback alias", host: "localhost:8081", origin: "http://127.0.0.1:18081", allowed: true},
+		{name: "cross-site host", host: "127.0.0.1:8081", origin: "https://example.com", allowed: false},
+		{name: "remote port mismatch", host: "admin.example:8081", origin: "http://admin.example:18081", allowed: false},
+		{name: "scheme mismatch", host: "127.0.0.1:8081", origin: "https://127.0.0.1:8081", allowed: false},
+		{name: "origin with path", host: "127.0.0.1:8081", origin: "http://127.0.0.1:8081/path", allowed: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/browser", http.NoBody)
+			req.Host = test.host
+			req.Header.Set("Origin", test.origin)
+			err := sameOrigin(req)
+			if test.allowed && err != nil {
+				t.Fatalf("sameOrigin() error = %v", err)
+			}
+			if !test.allowed && err == nil {
+				t.Fatal("sameOrigin() accepted a cross-origin request")
+			}
+		})
 	}
 }
 
