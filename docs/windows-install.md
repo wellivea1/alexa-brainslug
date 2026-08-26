@@ -72,9 +72,14 @@ private, put a fine-grained GitHub token with read-only repository contents
 access in a process-scoped environment variable first:
 
 ```powershell
-$env:BRAINSLUG_GITHUB_TOKEN = "temporary-read-only-token"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-Remove-Item Env:BRAINSLUG_GITHUB_TOKEN
+$secureToken = Read-Host "Read-only GitHub token" -AsSecureString
+$credential = [pscredential]::new("github", $secureToken)
+$env:BRAINSLUG_GITHUB_TOKEN = $credential.GetNetworkCredential().Password
+try {
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+} finally {
+  Remove-Item Env:BRAINSLUG_GITHUB_TOKEN
+}
 ```
 
 Avoid putting a long-lived or write-capable token in shell history. The token
