@@ -18,7 +18,7 @@ COPY . .
 # table and DWARF data.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/brainslug ./cmd/brainslug
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 # wget is used by the healthcheck below and ships in the base image.
 RUN apk add --no-cache ca-certificates \
