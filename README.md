@@ -5,7 +5,7 @@
 <h1 align="center">Brainslug</h1>
 
 <p align="center">
-  <strong>A friendly little intelligence parasite for Alexa.</strong><br>
+  <strong>A friendly intelligence-enhancing parasite for Alexa.</strong><br>
   Ask out loud. Choose the brain. Keep the memory at home.
 </p>
 
