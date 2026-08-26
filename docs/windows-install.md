@@ -51,12 +51,11 @@ created.
 
 ## Install On A Bare Machine
 
-This repository is private. On the bare machine:
+This repository is public. On the bare machine:
 
-1. Sign in to GitHub in a browser.
-2. Open the repository and choose **Code -> Download ZIP**.
-3. Extract the ZIP.
-4. Inspect and run `install.ps1` from the extracted directory:
+1. Open the repository and choose **Code -> Download ZIP**.
+2. Extract the ZIP.
+3. Inspect and run `install.ps1` from the extracted directory:
 
 ```powershell
 Set-Location "path\to\alexa-brainslug-main"
@@ -66,25 +65,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 
 This path needs no Git client. It builds and runs from the extracted directory.
 
-The same installer can bootstrap the rest of the repository when only
-`install.ps1` has been copied to the machine. Because the repository is
-private, put a fine-grained GitHub token with read-only repository contents
-access in a process-scoped environment variable first:
-
-```powershell
-$secureToken = Read-Host "Read-only GitHub token" -AsSecureString
-$credential = [pscredential]::new("github", $secureToken)
-$env:BRAINSLUG_GITHUB_TOKEN = $credential.GetNetworkCredential().Password
-try {
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-} finally {
-  Remove-Item Env:BRAINSLUG_GITHUB_TOKEN
-}
-```
-
-Avoid putting a long-lived or write-capable token in shell history. The token
-is used only as an HTTP authorization header and is not written to the source
-manifest, `.env`, task, or logs.
+The same installer can bootstrap the rest of the public repository when only
+`install.ps1` has been copied to the machine. No GitHub account or token is
+required.
 
 The standalone destination is `%LOCALAPPDATA%\Brainslug`. Choose another with
 `-InstallDirectory`:
@@ -101,9 +84,9 @@ tree is moved into the install directory. A `.partial` transfer is deleted and
 never used as source.
 
 No published checksum exists for a moving Git branch archive, so the source
-archive is fetched through the authenticated GitHub API over HTTPS and
-validated for the expected Brainslug Go module before installation. The
-installer records SHA-256 hashes for every managed source file in
+archive is fetched through the GitHub API over HTTPS and validated for the
+expected Brainslug Go module before installation. The installer records SHA-256
+hashes for every managed source file in
 `.brainslug-source.json`; later updates refuse to overwrite local source edits.
 
 ## Install From A Checkout
@@ -176,8 +159,7 @@ wrong, tracked files have local changes, or the remote cannot be applied as a
 fast-forward. For a standalone install, it first verifies every managed file
 against `.brainslug-source.json`, then downloads and fully extracts a staged
 archive before updating managed source. Git is not needed for this path.
-Private standalone updates read `BRAINSLUG_GITHUB_TOKEN` from the current
-process just like the initial bootstrap.
+Standalone updates fetch the public source without requiring a GitHub token.
 
 Network operations retry up to five times with exponential backoff. Downloads
 use `.partial` files and are promoted only when complete. The Go archive also

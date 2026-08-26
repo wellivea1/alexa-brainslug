@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="go.mod"><img alt="Go 1.26" src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white"></a>
-  <a href="LICENSE"><img alt="Proprietary license" src="https://img.shields.io/badge/license-proprietary-555?style=flat-square"></a>
+  <a href="LICENSE"><img alt="GPL-2.0-only license" src="https://img.shields.io/badge/license-GPL--2.0--only-blue?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/runtime-self--hosted-2F855A?style=flat-square">
 </p>
 
@@ -81,8 +81,8 @@ Requirements:
 
 ### Windows setup
 
-On a bare Windows machine, sign in to this private repository, choose
-**Code -> Download ZIP**, extract it, then run:
+On a bare Windows machine, open the public repository, choose **Code -> Download
+ZIP**, extract it, then run:
 
 ```powershell
 Set-Location "path\to\alexa-brainslug-main"
@@ -97,13 +97,12 @@ Or, from a cloned checkout, run:
 
 An extracted ZIP does not require Git, `winget`, administrator rights, or a
 preinstalled Go toolchain. A copied standalone `install.ps1` can instead
-bootstrap to `%LOCALAPPDATA%\Brainslug`; private-repository access is read from
-the temporary `BRAINSLUG_GITHUB_TOKEN` environment variable and is never saved.
-When Go is missing, the installer offers a user-local copy verified against the
-SHA-256 published by go.dev. It runs the tests, builds `bin\brainslug.exe`,
-creates `.env` when needed, and asks whether Brainslug should start
-automatically when you sign in. The recommended startup option uses a per-user
-Scheduled Task with no stored password.
+bootstrap the public source to `%LOCALAPPDATA%\Brainslug`. When Go is missing,
+the installer offers a user-local copy verified against the SHA-256 published
+by go.dev. It runs the tests, builds `bin\brainslug.exe`, creates `.env` when
+needed, and asks whether Brainslug should start automatically when you sign in.
+The recommended startup option uses a per-user Scheduled Task with no stored
+password.
 
 For unattended setup:
 
@@ -298,3 +297,7 @@ timeouts are not a substitute for a persisted deferred-job path.
 - [Progress checks](docs/progress-checks.md)
 - [MCP roadmap](docs/mcp-roadmap.md)
 
+## License
+
+Brainslug is licensed under the [GNU General Public License version 2 only](LICENSE)
+(`GPL-2.0-only`).

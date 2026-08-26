@@ -123,7 +123,7 @@ jobs:
       # A container that cannot start is a deployment that cannot start. This
       # catches listener and volume disagreements between the image and
       # Compose configuration.
-      - name: Verify the container starts and serves private health
+      - name: Verify the container starts and serves liveness
         run: |
           docker run --detach --name brainslug-ci \
             --env OPENAI_API_KEY=ci-placeholder-key \
@@ -133,15 +133,15 @@ jobs:
             alexa-brainslug:ci
 
           for _ in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:18081/health; then
+            if curl --fail --silent http://127.0.0.1:18081/healthz; then
               echo
-              echo "private health endpoint responded"
+              echo "liveness endpoint responded"
               break
             fi
             sleep 1
           done
 
-          curl --fail --silent http://127.0.0.1:18081/health >/dev/null
+          curl --fail --silent http://127.0.0.1:18081/healthz >/dev/null
 
           # The public ASK listener must not expose administration even when
           # Docker publishes the whole listener port.
