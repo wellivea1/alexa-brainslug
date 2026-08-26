@@ -98,13 +98,12 @@ func (p *ChatGPT) Ask(ctx context.Context, req Request) (Response, error) {
 	}
 
 	payload := chatGPTRequest{
-		Model:           model,
-		Instructions:    instructions,
-		Input:           []chatGPTInput{{Role: providerRoleUser, Content: prompt}},
-		MaxOutputTokens: maxTokens,
-		Store:           false,
-		Stream:          true,
-		Include:         []string{"reasoning.encrypted_content"},
+		Model:        model,
+		Instructions: instructions,
+		Input:        []chatGPTInput{{Role: providerRoleUser, Content: prompt}},
+		Store:        false,
+		Stream:       true,
+		Include:      []string{"reasoning.encrypted_content"},
 	}
 	if p.reasoningEffort != "" {
 		payload.Reasoning = &openAIReasoningConfig{Effort: p.reasoningEffort}
@@ -184,15 +183,14 @@ func (p *ChatGPT) Ask(ctx context.Context, req Request) (Response, error) {
 }
 
 type chatGPTRequest struct {
-	Model           string                 `json:"model"`
-	Instructions    string                 `json:"instructions"`
-	Input           []chatGPTInput         `json:"input"`
-	MaxOutputTokens int                    `json:"max_output_tokens"`
-	Store           bool                   `json:"store"`
-	Stream          bool                   `json:"stream"`
-	Include         []string               `json:"include"`
-	Reasoning       *openAIReasoningConfig `json:"reasoning,omitempty"`
-	Text            *openAITextConfig      `json:"text,omitempty"`
+	Model        string                 `json:"model"`
+	Instructions string                 `json:"instructions"`
+	Input        []chatGPTInput         `json:"input"`
+	Store        bool                   `json:"store"`
+	Stream       bool                   `json:"stream"`
+	Include      []string               `json:"include"`
+	Reasoning    *openAIReasoningConfig `json:"reasoning,omitempty"`
+	Text         *openAITextConfig      `json:"text,omitempty"`
 }
 
 type chatGPTInput struct {

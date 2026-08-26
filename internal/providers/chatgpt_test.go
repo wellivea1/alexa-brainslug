@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,6 +26,7 @@ func (f fakeChatGPTCredentials) Token(context.Context) (accessToken, accountID s
 
 func TestChatGPTAskUsesAccountTransportAndNormalizesSSE(t *testing.T) {
 	var captured chatGPTRequest
+	var rawPayload map[string]json.RawMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer access-secret" || request.Header.Get("ChatGPT-Account-Id") != "account-1" {
 			t.Errorf("account headers = %#v", request.Header)
@@ -32,7 +34,14 @@ func TestChatGPTAskUsesAccountTransportAndNormalizesSSE(t *testing.T) {
 		if request.Header.Get("Originator") != "brainslug" || request.Header.Get("Session-Id") == "" {
 			t.Errorf("connector headers = %#v", request.Header)
 		}
-		if err := json.NewDecoder(request.Body).Decode(&captured); err != nil {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &rawPayload); err != nil {
 			t.Fatal(err)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -52,6 +61,9 @@ func TestChatGPTAskUsesAccountTransportAndNormalizesSSE(t *testing.T) {
 	}
 	if !captured.Stream || captured.Store || captured.Model != "gpt-test" || len(captured.Input) != 1 {
 		t.Fatalf("request = %#v", captured)
+	}
+	if _, exists := rawPayload["max_output_tokens"]; exists {
+		t.Fatal("ChatGPT account request included unsupported max_output_tokens")
 	}
 }
 
