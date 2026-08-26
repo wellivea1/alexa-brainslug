@@ -1,329 +1,163 @@
-# Alexa Brainslug
+<p align="center">
+  <img src="skill/assets/brainslug-icon-512.png" width="160" alt="Brainslug icon">
+</p>
 
-Alexa Brainslug is a self-hosted, single-owner Alexa custom skill gateway. It sends a question to an explicitly selected AI provider, speaks a concise answer through an Echo, and stores the complete result locally in SQLite when history is enabled.
+<h1 align="center">Brainslug</h1>
 
-The current entry point is a classic Alexa Skills Kit (ASK) custom skill. Alexa is an inbound adapter over a platform-neutral application service; provider clients and SQLite are outbound adapters. Alexa+ MCP remains a gated future option, not a current dependency or deployment target.
+<p align="center">
+  <strong>A friendly little intelligence parasite for Alexa.</strong><br>
+  Ask out loud. Choose the brain. Keep the memory at home.
+</p>
 
-Brainslug is not a public chatbot service, an Alexa control API, or a generic MCP relay.
+<p align="center">
+  <a href="go.mod"><img alt="Go 1.26" src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white"></a>
+  <a href="LICENSE"><img alt="Proprietary license" src="https://img.shields.io/badge/license-proprietary-555?style=flat-square"></a>
+  <img alt="Self-hosted" src="https://img.shields.io/badge/runtime-self--hosted-2F855A?style=flat-square">
+</p>
 
-## Current Architecture
+> **You:** "Alexa, ask Brain Slug why the sky is blue."
+>
+> **Brainslug:** asks the provider you selected, speaks a concise answer, and
+> can save the complete exchange locally.
+
+Brainslug is a self-hosted, single-owner Alexa custom skill gateway. Alexa is
+the current entry point, but the application core is platform-neutral. It is
+not a public chatbot, an Alexa control API, or an MCP relay.
+
+## What it does
+
+- Verifies Amazon ASK certificates, signatures, timestamps, and the exact skill
+  ID before accepting a request.
+- Supports two-turn questions, natural one-shot questions, and `last response`.
+- Connects to OpenAI, OpenAI-compatible servers, or Anthropic.
+- Optionally connects a ChatGPT Plus/Pro account with browser or code login.
+- Speaks a short answer while retaining the complete result in local SQLite.
+- Provides a private dashboard for activity, provider, model, and credential
+  management.
+- Keeps the public ASK listener separate from the private admin listener.
+
+The interaction model builds in the Alexa Developer Console, signed requests
+pass verification, and a beta-enrolled Echo has completed the launch and
+follow-up question flow.
+
+## How it fits together
 
 ```text
-Alexa cloud
+Echo or Alexa app
+  -> Alexa cloud
   -> public HTTPS POST /alexa
   -> ASK request verification
-  -> internal/alexa adapter
-  -> internal/app service
-  -> selected provider adapter
-  -> SQLite repository adapter
-  -> concise Alexa response + local history
+  -> application service
+  -> selected AI provider
+  -> concise spoken response
 
-127.0.0.1:8081
-  -> dashboard
-  -> history JSON
-  -> health
+application service
+  -> local SQLite history
+
+owner
+  -> private dashboard on 127.0.0.1:8081
 ```
 
-The public ASK listener and local administrative listener are separate. A broad proxy rule pointed at the ASK port cannot expose the dashboard or history routes because those routes are not registered on that listener.
+| Listener | Purpose | Exposure |
+| --- | --- | --- |
+| `127.0.0.1:8080` | `POST /alexa` only | Path-scoped HTTPS proxy |
+| `127.0.0.1:8081` | Dashboard, history, health | Host loopback only |
 
-Future approved MCP client:
+> [!IMPORTANT]
+> Never expose port `8081`. It contains private prompts, answers, and provider
+> settings and has no remote-user authentication.
 
-```text
-MCP client
-  -> future authenticated MCP adapter
-  -> the same internal/app operations
-```
+See [Architecture](docs/architecture.md) for the adapter boundaries and
+listener design.
 
-No MCP server is implemented today.
+## Quick start
 
-## Implemented
-
-- Transport-neutral `internal/app` service for asking questions and reading the latest saved answer.
-- ASK adapter that does not import provider implementations, prompt policy, or concrete store records.
-- OpenAI Responses API and Anthropic Messages API clients.
-- Stable application error categories and provider error redaction.
-- SQLite interaction history with transactional, append-only migrations.
-- Namespaced application principals with Alexa history-key compatibility.
-- Full ASK web-service verification infrastructure:
-  - certificate URL normalization and allowlisting;
-  - bounded certificate retrieval and cache;
-  - certificate-chain and Alexa signing-name validation;
-  - `Signature-256` verification over the exact raw request body;
-  - timestamp freshness enforcement;
-  - allowed skill application ID enforcement.
-- Separate public and administrative HTTP listeners.
-- Dialog-based two-turn question capture and natural one-shot carrier phrases.
-- Explicit handling of OpenAI completed, incomplete, failed, canceled, queued, and in-progress response states.
-- Distinct handling for output-token exhaustion and provider failures.
-- Docker Compose, Caddy example, CI workflow, lint configuration, and unit/integration tests.
-
-## Not Yet Implemented Or Validated
-
-- Physical Echo recognition and complete conversational two-turn validation.
-- Durable deferred/background jobs for slow reasoning requests.
-- Request idempotency and restart recovery.
-- Pending, completed, failed, and canceled job status retrieval.
-- Per-principal rate limiting, provider concurrency limits, and a global spend cap.
-- Retention and deletion controls.
-- Public multi-user hosting or Skill Store publication.
-- Alexa+ MCP runtime code.
-
-The current provider path is synchronous. Provider timeouts default to six seconds so the service has a chance to return inside Alexa's external request budget. A slow reasoning request can still fail. The proper long-term fix is a durable deferred-job path, not a longer ASK timeout.
-
-Request verification has passed an Amazon-signed request from the Alexa Developer Console with verification enabled. Keep the public route controlled: continuous exposure still requires rate limits, bounded provider concurrency, and a spend cap.
-
-## Repository Layout
-
-```text
-cmd/brainslug      process lifecycle and listener wiring
-internal/alexa     ASK verification, request mapping, dialog, and responses
-internal/app       platform-neutral question and history use cases
-internal/providers outbound AI provider adapters
-internal/store     outbound SQLite repository and migrations
-internal/speech    model-output shaping for spoken responses
-internal/config    environment loading and startup validation
-internal/security  HTTP middleware and secret redaction
-internal/prompts   provider system instructions
-internal/web       loopback-only dashboard
-skill/             ASK interaction model
-```
-
-Dependency direction:
-
-```text
-inbound adapters
-  -> internal/app
-  -> application-owned provider and repository ports
-
-internal/providers and internal/store
-  -> implement those ports
-```
-
-See [docs/architecture.md](docs/architecture.md).
-
-## Requirements
+Requirements:
 
 - Go 1.26 or newer.
-- Docker and Docker Compose for containerized use.
-- An API key for the selected provider, or a ChatGPT Plus/Pro account for the
-  optional OpenCode-compatible OpenAI account connector.
-- A public HTTPS endpoint for Alexa testing.
-- A private or loopback path to the administrative listener.
+- An Alexa custom skill and a public HTTPS endpoint.
+- A credential for the selected provider, or an optional ChatGPT account.
 
-Alexa requests originate in Amazon's cloud. A LAN-only URL is not a valid skill endpoint.
-
-## Configuration
-
-Copy the example file:
+Prepare the environment:
 
 ```powershell
 Copy-Item .env.example .env
 notepad .env
 ```
 
-Important defaults:
+Set the real public URL, skill ID, provider, model, and credential. A minimal
+OpenAI example looks like this:
 
-```text
-SERVER_ADDR=127.0.0.1:8080
-ADMIN_SERVER_ADDR=127.0.0.1:8081
+```dotenv
+PUBLIC_BASE_URL=https://brain-slug.example.com
+ALEXA_VERIFY_REQUESTS=true
+ALEXA_ALLOWED_SKILL_ID=amzn1.ask.skill.your-real-id
+
 AI_PROVIDER=openai
 OPENAI_AUTH_MODE=api_key
 OPENAI_MODEL=gpt-5.6-terra
-OPENAI_MAX_OUTPUT_TOKENS=25000
-OPENAI_TIMEOUT_SECONDS=6
-OPENAI_REASONING_EFFORT=
-OPENAI_TEXT_VERBOSITY=
-ALEXA_VERIFY_REQUESTS=true
-SAVE_HISTORY=true
+OPENAI_API_KEY=your-key-here
 ```
 
-`OPENAI_MAX_OUTPUT_TOKENS` is reasoning and output headroom, not a desired answer length. Reasoning models may consume the same budget before producing visible text.
-
-Leave `OPENAI_REASONING_EFFORT` and `OPENAI_TEXT_VERBOSITY` unset to use the
-provider default.
-
-Set the real skill ID before testing:
-
-```text
-ALEXA_ALLOWED_SKILL_ID=amzn1.ask.skill.example
-```
-
-Provider and model selection remain explicit. Brainslug does not silently fall back to another provider or model.
-
-## Local Development
-
-PowerShell:
+Start Brainslug:
 
 ```powershell
-Copy-Item .env.example .env
-notepad .env
 go mod download
 go run ./cmd/brainslug
 ```
 
-OpenAI minimum configuration:
-
-```text
-AI_PROVIDER=openai
-OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=gpt-5.6-terra
-```
-
-You may set `OPENAI_API_KEY_FILE` instead of `OPENAI_API_KEY`. The file should contain exactly one non-comment secret value.
-
-OpenAI has two deliberately separate credential paths:
-
-- `api_key` calls the documented [OpenAI API](https://developers.openai.com/api/reference/overview)
-  with `OPENAI_API_KEY` or `OPENAI_API_KEY_FILE`.
-- `chatgpt` calls the account-scoped Codex Responses transport with a locally
-  connected ChatGPT Plus/Pro account. [OpenCode documents this account login](https://opencode.ai/docs/providers/#openai),
-  but it is not the standard OpenAI API-key contract and available models are
-  controlled by the account.
-
-To connect a ChatGPT account, open `http://127.0.0.1:8081/`, choose
-**Inference → OpenAI**, and use **Connect**. Browser login opens a
-short-lived callback on host loopback port `1455`; do not forward that port.
-Use **Use code** when running in Docker or when the browser callback cannot
-reach the Brainslug host. After sign-in, select **ChatGPT account**, choose an
-account-supported model, and save settings. Brainslug does not silently change
-the configured model.
-
-OpenAI-compatible example:
-
-```text
-AI_PROVIDER=openai-compatible
-OPENAI_COMPATIBLE_API_KEY=local-or-gateway-key
-OPENAI_COMPATIBLE_MODEL=qwen2.5:0.5b
-OPENAI_COMPATIBLE_BASE_URL=http://127.0.0.1:11434/v1
-```
-
-The compatible route has its own dashboard tab and persisted settings. It does
-not overwrite the official OpenAI model, credential mode, or request controls.
-
-Anthropic example:
-
-```text
-AI_PROVIDER=anthropic
-ANTHROPIC_API_KEY=your_key_here
-ANTHROPIC_MODEL=your_explicit_model_name
-```
-
-Run local checks:
-
-```bash
-go build ./...
-go test ./...
-go tool golangci-lint run ./...
-```
-
-Administrative health:
+Check the private listener:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8081/health
+Start-Process http://127.0.0.1:8081/
 ```
 
-Dashboard and history:
+The full configuration surface is documented in
+[`.env.example`](.env.example). Provider and model selection are always
+explicit; Brainslug does not silently fall back or substitute a model.
 
-```text
-http://127.0.0.1:8081/
-http://127.0.0.1:8081/history
-```
+## Providers
 
-The dashboard provides an operating overview, searchable recent activity, and
-explicit inference-provider management. Provider, model, endpoint, token cap,
-timeout, reasoning effort, and text verbosity changes take effect immediately
-and persist in `brainslug.settings.json` beside the SQLite database by default.
-Set `RUNTIME_SETTINGS_PATH` to choose another location.
+| Provider | Credential | Notes |
+| --- | --- | --- |
+| OpenAI | API key or secret file | Official Responses API |
+| OpenAI account | ChatGPT login | Optional account-scoped connector |
+| OAI Compat. | API key or local token | Explicit compatible base URL |
+| Anthropic | Console API key or secret file | Direct Claude Messages API |
 
-The runtime settings file never contains provider credentials. A masked API-key
-field in each provider tab can save a key locally without displaying it again.
-Those keys live in `brainslug.provider-auth.json` beside SQLite by default, or
-at `PROVIDER_AUTH_FILE`, with owner-only permissions where the platform
-supports them. A saved local key takes precedence while present; removing it
-reveals any `OPENAI_API_KEY`, `OPENAI_API_KEY_FILE`, `ANTHROPIC_API_KEY`, or
-`ANTHROPIC_API_KEY_FILE` value loaded at startup. The compatible tab similarly
-uses `OPENAI_COMPATIBLE_API_KEY` or `OPENAI_COMPATIBLE_API_KEY_FILE`.
+To connect a ChatGPT account, open the dashboard and choose
+**Inference -> OpenAI -> Connect**. Browser login uses a temporary callback on
+`localhost:1455`; do not forward that port. Use **Use code** when the browser
+cannot reach the Brainslug host, including many Docker or remote-shell setups.
 
-A connected ChatGPT account is stored separately in
-`brainslug.openai-auth.json` beside SQLite by default, or at
-`OPENAI_CHATGPT_AUTH_FILE`. That file contains refreshable bearer credentials;
-keep both auth files private and never commit or copy them casually. The
-dashboard exposes only connection state and a generic credential source.
+> [!NOTE]
+> The ChatGPT connector follows the OpenCode-compatible account flow. It is
+> separate from the documented OpenAI API-key contract, and available models
+> depend on the account.
 
-The model manager keeps OpenAI, OpenAI-compatible, and Anthropic configuration
-in one panel with a separate provider tab and persisted settings for each.
-Provider and model selection stay explicit: Brainslug never falls back or
-silently substitutes a different model.
+OpenAI-compatible settings are independent from official OpenAI settings.
+Anthropic uses an Anthropic Console API key; a Claude Pro or Max subscription
+login is not an API credential.
 
-Anthropic uses the direct Claude Messages API at `POST /v1/messages` with an
-Anthropic Console API key. Brainslug does not repurpose a Claude Pro or Max
-subscription login as an API credential.
+## Alexa setup
 
-The OpenAI model suggestions were reviewed against the official catalog on
-August 25, 2026 and include `gpt-5.6-sol`, `gpt-5.6-terra`, and
-`gpt-5.6-luna`. An exact custom model ID remains valid for compatible servers.
-See the [OpenAI model catalog](https://developers.openai.com/api/docs/models).
-
-The management UI uses a restrained, flat interpretation of Amazon's
-[Alexa color palette](https://developer.amazon.com/en-US/alexa/branding/alexa-guidelines/brand-guidelines/color)
-and applies a compact panel/row hierarchy based on the NoobBoard UI standards:
-one raised workspace, strong section bands, soft peer-row dividers, aligned
-controls, and 44 px mobile targets. It does not use or reproduce Amazon's
-protected Alexa logo.
-
-The ASK listener at port 8080 intentionally has no health, history, or dashboard route.
-
-### Verification-disabled fixture testing
-
-`ALEXA_VERIFY_REQUESTS=false` exists for local fixture tests. Do not combine it with a publicly reachable route.
-
-For actual Alexa testing, use:
-
-```text
-ALEXA_VERIFY_REQUESTS=true
-ALEXA_ALLOWED_SKILL_ID=<your actual skill ID>
-```
-
-## Docker Deployment
-
-```powershell
-Copy-Item .env.example .env
-notepad .env
-docker compose up --build -d
-docker compose logs -f brainslug
-```
-
-The provided compose file:
-
-- binds container port 8080 to host loopback port 8080 for ASK proxying;
-- binds container port 8081 to host loopback port 8081 for administration;
-- stores SQLite data under `./data`;
-- uses a read-only filesystem outside the data volume;
-- drops Linux capabilities and enables `no-new-privileges`.
-
-Leave `SQLITE_PATH` unset in `.env` for the provided container deployment. The image already points it at `/data/brainslug.db`.
-
-See [docs/local-deployment.md](docs/local-deployment.md).
-
-## Alexa Skill Setup
-
-1. Create a custom skill in the Alexa Developer Console.
-2. Use a custom interaction model and invocation name `brain slug`.
-3. Import `skill/interaction-model.json`.
+1. Create a **Custom** skill in the
+   [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
+2. Name it **Brainslug** and use the invocation name `brain slug`.
+3. Import [`skill/interaction-model.json`](skill/interaction-model.json).
 4. Set the HTTPS endpoint to `https://your-domain.example/alexa`.
-5. Record the skill ID in `ALEXA_ALLOWED_SKILL_ID`.
+5. Copy the skill ID into `ALEXA_ALLOWED_SKILL_ID`.
 6. Keep `ALEXA_VERIFY_REQUESTS=true`.
-7. Build the model and test it in the Developer Console and on the real Echo.
-
-Two-turn flow:
+7. Build the model and enroll the intended Alexa account in the beta.
 
 ```text
-Alexa, open Brain Slug
-Brainslug is ready. What should I ask?
-<question>
+You:       Alexa, open Brain Slug
+Brainslug: Brainslug is ready. What should I ask?
+You:       Why do databases use write-ahead logs?
 ```
 
-One-shot forms represented in the interaction model include:
+One-shot forms include:
 
 ```text
 Alexa, ask Brain Slug about the halting problem
@@ -331,62 +165,89 @@ Alexa, ask Brain Slug regarding SQLite write-ahead logging
 Alexa, tell Brain Slug to answer this question: why is the sky blue
 ```
 
-The interaction model builds in the Developer Console, signed launch, question, and last-response requests pass there, and a beta-enrolled physical Echo completes the launch and question flow. Broader one-shot recognition coverage still requires device testing.
+> [!TIP]
+> If an active beta is missing from **Your Skills**, verify the Amazon
+> marketplace account that accepted the invitation. The same email can belong
+> to separate `.com` and `.co.jp` consumer accounts.
 
-See [docs/alexa-skill-setup.md](docs/alexa-skill-setup.md) and [docs/invocation-design.md](docs/invocation-design.md).
+See [Alexa skill setup](docs/alexa-skill-setup.md) for endpoint, beta, and
+device troubleshooting.
 
-## Public HTTPS Routing
+## Public routing
 
-Expose only the ASK listener:
+Alexa requests originate in Amazon's cloud, so a LAN-only URL is not enough.
+Expose only this route:
 
 ```text
 POST https://brain-slug.example.com/alexa
   -> 127.0.0.1:8080/alexa
 ```
 
-Expected public behavior:
+The included [`Caddyfile.example`](Caddyfile.example) provides a path-scoped
+example. Public requests to `/`, `/health`, and `/history` should return `404`.
 
-```text
-POST /alexa   -> ASK handler
-GET  /        -> 404
-GET  /history -> 404
-GET  /health  -> 404
+For Docker:
+
+```powershell
+docker compose up --build -d
+docker compose logs -f brainslug
 ```
 
-The administrative listener stays on host loopback port 8081 and must not be routed publicly.
+The provided Compose file publishes both service ports back to host loopback,
+stores data under `./data`, uses a read-only filesystem outside that volume,
+and drops Linux capabilities. See [Local deployment](docs/local-deployment.md)
+for native, Docker, Caddy, and tunnel layouts.
 
-Use Caddy or a path-scoped Cloudflare Tunnel. `Caddyfile.example` routes only `/alexa`.
+## Local data
 
-## Security
+| File | Contents |
+| --- | --- |
+| `brainslug.db` | Prompts, complete answers, status, and timing |
+| `brainslug.settings.json` | Non-secret dashboard settings |
+| `brainslug.provider-auth.json` | Saved provider API keys |
+| `brainslug.openai-auth.json` | Refreshable ChatGPT account credentials |
 
-- Leave ASK verification enabled for real requests.
-- Set the exact skill ID.
-- Do not expose the administrative listener.
-- Do not log or commit provider credentials.
-- Treat SQLite, prompts, answers, and backups as private data.
-- Add rate limits and a global spend cap before continuous public exposure.
-- Keep future MCP authentication separate from ASK request verification.
-- Do not send raw Alexa account identifiers to providers; the provider adapter receives a derived principal key and hashes it where an end-user identifier is supported.
+Treat the database, auth files, and backups as private. Paths can be changed
+with `SQLITE_PATH`, `RUNTIME_SETTINGS_PATH`, `PROVIDER_AUTH_FILE`, and
+`OPENAI_CHATGPT_AUTH_FILE`.
 
-See [docs/security.md](docs/security.md).
+## Development
+
+```bash
+go build ./...
+go vet ./...
+go test ./...
+go tool golangci-lint run ./...
+```
+
+The linter is pinned in `go.mod`; no global installation is required. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for architecture boundaries, testing
+conventions, and the full local CI loop.
+
+## Current limits
+
+Brainslug does not yet provide durable background jobs, restart recovery,
+request idempotency, rate or concurrency limits, a global spend cap, or history
+retention controls. The synchronous provider timeout defaults to six seconds.
+
+Add operational limits before continuous unattended exposure. Longer ASK
+timeouts are not a substitute for a persisted deferred-job path.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
-- [Project plan](docs/project-plan.md)
-- [Alexa platform constraints](docs/alexa-platform.md)
-- [Invocation design](docs/invocation-design.md)
 - [Alexa skill setup](docs/alexa-skill-setup.md)
+- [Invocation design](docs/invocation-design.md)
 - [Local deployment](docs/local-deployment.md)
 - [Security](docs/security.md)
-- [MCP roadmap](docs/mcp-roadmap.md)
+- [Project plan](docs/project-plan.md)
 - [Progress checks](docs/progress-checks.md)
+- [MCP roadmap](docs/mcp-roadmap.md)
 
-## Next Implementation Phases
+---
 
-1. Validate spoken recognition and the complete conversational flow on a physical Echo.
-2. Add per-principal limits and a global spend cap.
-3. Add durable jobs, request idempotency, bounded background workers, and restart recovery.
-4. Make `last response` distinguish pending, completed, and failed jobs.
-5. Add retention and deletion controls.
-6. Re-evaluate MCP only after a concrete host, access path, and domain-specific capability set exist.
+<p align="center">
+  <strong>Small skill. Explicit brain. Private memory.</strong><br>
+  Proprietary software for the owner's self-hosted use. See
+  <a href="LICENSE">LICENSE</a>.
+</p>
