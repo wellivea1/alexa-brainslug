@@ -515,7 +515,7 @@ func (d *Dashboard) systemView(active inference.ProviderState) systemView {
 }
 
 func calculateStats(interactions []store.Interaction) dashboardStats {
-	stats := dashboardStats{Total: len(interactions), LastActivity: "No activity yet", AverageMS: "—", P95MS: "—", SuccessRate: "—"}
+	stats := dashboardStats{Total: len(interactions), LastActivity: "No activity yet", AverageMS: "-", P95MS: "-", SuccessRate: "-"}
 	if len(interactions) == 0 {
 		return stats
 	}
@@ -732,7 +732,7 @@ func formatUptime(value time.Duration) string {
 
 func formatMilliseconds(value int64) string {
 	if value <= 0 {
-		return "—"
+		return "-"
 	}
 	if value < 1000 {
 		return strconv.FormatInt(value, 10) + " ms"
@@ -767,7 +767,7 @@ func firstNonEmpty(values ...string) string {
 
 var dashboardTemplate = template.Must(template.New("dashboard").Funcs(template.FuncMap{
 	"ms":             formatMilliseconds,
-	"timestamp":      func(value time.Time) string { return value.UTC().Format("Jan 2, 2006 · 15:04 UTC") },
-	"shortTimestamp": func(value time.Time) string { return value.UTC().Format("Jan 2 · 15:04") },
+	"timestamp":      func(value time.Time) string { return value.UTC().Format("Jan 2, 2006 | 15:04 UTC") },
+	"shortTimestamp": func(value time.Time) string { return value.UTC().Format("Jan 2 | 15:04") },
 	"lower":          strings.ToLower,
 }).Parse(dashboardTemplateSource))

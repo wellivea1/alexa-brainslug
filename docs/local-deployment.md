@@ -96,8 +96,8 @@ mode.
 
 For a native local process, **Connect** uses browser PKCE and a temporary
 loopback callback on port `1455`. It needs no router, firewall, tunnel, or
-public port forwarding. Keep it local. In Docker—or whenever `localhost:1455`
-in the browser cannot reach the process—use **Use code** instead. The code flow
+public port forwarding. Keep it local. In Docker - or whenever `localhost:1455`
+in the browser cannot reach the process - use **Use code** instead. The code flow
 requires only outbound HTTPS and the existing loopback dashboard. Connected
 tokens default to `/data/brainslug.openai-auth.json` in Docker because the
 SQLite directory is the writable persistent volume.
