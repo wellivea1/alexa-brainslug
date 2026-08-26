@@ -38,7 +38,7 @@ func TestPublicHandlerExposesOnlyAlexa(t *testing.T) {
 		t.Fatalf("POST /alexa status = %d", rec.Code)
 	}
 
-	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css", "/settings/provider", "/auth/provider/api-key", "/auth/provider/api-key/remove", "/auth/openai/browser", "/auth/openai/device/start", "/auth/openai/device/poll", "/auth/openai/disconnect"} {
+	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css", "/assets/dashboard.js", "/settings/provider", "/auth/provider/api-key", "/auth/provider/api-key/remove", "/auth/openai/browser", "/auth/openai/device/start", "/auth/openai/device/poll", "/auth/openai/disconnect"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
 			rec := httptest.NewRecorder()
@@ -73,7 +73,7 @@ func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
 	}}
 	handler := buildAdminHandler(&cfg, controller, db, time.Now().UTC())
 
-	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css"} {
+	for _, path := range []string{"/", "/health", "/history", "/assets/dashboard.css", "/assets/dashboard.js"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
 			rec := httptest.NewRecorder()

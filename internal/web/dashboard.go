@@ -37,6 +37,7 @@ const (
 	providerAnthropic        = "anthropic"
 	schemeHTTP               = "http"
 	schemeHTTPS              = "https"
+	dashboardFetchHeader     = "X-Brainslug-Dashboard"
 )
 
 //go:embed templates/dashboard.html
@@ -44,6 +45,9 @@ var dashboardTemplateSource string
 
 //go:embed assets/dashboard.css
 var dashboardCSS []byte
+
+//go:embed assets/dashboard.js
+var dashboardJS []byte
 
 // Store is the history capability used by the dashboard.
 type Store interface {
@@ -139,6 +143,14 @@ func (d *Dashboard) HandleStyles(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(dashboardCSS)
 }
 
+// HandleScripts serves the small same-origin form transport used by browsers
+// that block top-level POST navigation to loopback addresses.
+func (d *Dashboard) HandleScripts(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	_, _ = w.Write(dashboardJS)
+}
+
 // HandleProviderUpdate validates and activates non-secret inference settings.
 func (d *Dashboard) HandleProviderUpdate(w http.ResponseWriter, r *http.Request) {
 	if d.inference == nil {
@@ -183,7 +195,7 @@ func (d *Dashboard) HandleProviderUpdate(w http.ResponseWriter, r *http.Request)
 		d.renderIndex(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/?section=inference&provider="+url.QueryEscape(r.PostFormValue("provider"))+"&saved=1", http.StatusSeeOther)
+	dashboardRedirect(w, r, "/?section=inference&provider="+url.QueryEscape(r.PostFormValue("provider"))+"&saved=1")
 }
 
 // HandleAPIKeySave stores a provider key without ever placing it in a URL,
@@ -202,7 +214,7 @@ func (d *Dashboard) HandleAPIKeySave(w http.ResponseWriter, r *http.Request) {
 		d.renderIndex(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/?section=inference&provider="+url.QueryEscape(provider)+"&credential=saved", http.StatusSeeOther)
+	dashboardRedirect(w, r, "/?section=inference&provider="+url.QueryEscape(provider)+"&credential=saved")
 }
 
 // HandleAPIKeyRemove deletes only a key saved through Brainslug. Environment
@@ -221,7 +233,7 @@ func (d *Dashboard) HandleAPIKeyRemove(w http.ResponseWriter, r *http.Request) {
 		d.renderIndex(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/?section=inference&provider="+url.QueryEscape(provider)+"&credential=removed", http.StatusSeeOther)
+	dashboardRedirect(w, r, "/?section=inference&provider="+url.QueryEscape(provider)+"&credential=removed")
 }
 
 // HandleOpenAIBrowserStart leaves the local dashboard for the PKCE login and
@@ -250,7 +262,7 @@ func (d *Dashboard) HandleOpenAIBrowserStart(w http.ResponseWriter, r *http.Requ
 		d.renderIndex(w, r, http.StatusBadGateway, "OpenAI login returned an invalid authorization URL.")
 		return
 	}
-	http.Redirect(w, r, authTarget.String(), http.StatusSeeOther)
+	dashboardRedirect(w, r, authTarget.String())
 }
 
 // HandleOpenAIDeviceStart begins the fallback code flow.
@@ -267,7 +279,7 @@ func (d *Dashboard) HandleOpenAIDeviceStart(w http.ResponseWriter, r *http.Reque
 		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/?section=inference&provider=openai&device="+url.QueryEscape(flow.ID), http.StatusSeeOther)
+	dashboardRedirect(w, r, "/?section=inference&provider=openai&device="+url.QueryEscape(flow.ID))
 }
 
 // HandleOpenAIDevicePoll completes a code flow after the user signs in.
@@ -286,10 +298,10 @@ func (d *Dashboard) HandleOpenAIDevicePoll(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if result == openauth.PollPending {
-		http.Redirect(w, r, "/?section=inference&provider=openai&device="+url.QueryEscape(id)+"&pending=1", http.StatusSeeOther)
+		dashboardRedirect(w, r, "/?section=inference&provider=openai&device="+url.QueryEscape(id)+"&pending=1")
 		return
 	}
-	http.Redirect(w, r, "/?section=inference&provider=openai&auth=connected", http.StatusSeeOther)
+	dashboardRedirect(w, r, "/?section=inference&provider=openai&auth=connected")
 }
 
 // HandleOpenAIDisconnect returns OpenAI to API-key mode before removing the
@@ -311,7 +323,7 @@ func (d *Dashboard) HandleOpenAIDisconnect(w http.ResponseWriter, r *http.Reques
 		d.renderIndex(w, r, http.StatusBadGateway, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/?section=inference&provider=openai&auth=disconnected", http.StatusSeeOther)
+	dashboardRedirect(w, r, "/?section=inference&provider=openai&auth=disconnected")
 }
 
 // HandleHistory serves bounded recent interactions as JSON.
@@ -694,6 +706,18 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func dashboardRedirect(w http.ResponseWriter, r *http.Request, target string) {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get(dashboardFetchHeader)), "fetch") {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(struct {
+			Location string `json:"location"`
+		}{Location: target})
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (d *Dashboard) authorizeMutation(w http.ResponseWriter, r *http.Request) bool {

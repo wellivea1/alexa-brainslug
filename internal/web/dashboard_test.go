@@ -141,7 +141,7 @@ func TestHandleIndexEscapesStoredText(t *testing.T) {
 	// The check is that no tag is opened. The literal text "onerror=" still
 	// appears, but inside escaped angle brackets it is inert prose, so
 	// asserting on it would fail for the wrong reason.
-	if strings.Contains(body, "<script") {
+	if strings.Contains(body, "<script>alert") {
 		t.Error("a script tag was rendered unescaped")
 	}
 	if strings.Contains(body, "<img") {
@@ -321,6 +321,23 @@ func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
 		t.Fatalf("update = %#v", controller.update)
 	}
 
+	fetchReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/settings/provider", strings.NewReader(form.Encode()))
+	fetchReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	fetchReq.Header.Set("Origin", "http://127.0.0.1:8081")
+	fetchReq.Header.Set(dashboardFetchHeader, "fetch")
+	fetchReq.Host = "127.0.0.1:8081"
+	fetchRec := httptest.NewRecorder()
+	dashboard.HandleProviderUpdate(fetchRec, fetchReq)
+	var fetchResult struct {
+		Location string `json:"location"`
+	}
+	if fetchRec.Code != http.StatusOK || json.NewDecoder(fetchRec.Body).Decode(&fetchResult) != nil {
+		t.Fatalf("fetch response = %d %q", fetchRec.Code, fetchRec.Body.String())
+	}
+	if fetchResult.Location != "/?section=inference&provider=openai&saved=1" {
+		t.Fatalf("fetch location = %q", fetchResult.Location)
+	}
+
 	bad := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/settings/provider", strings.NewReader("provider=openai"))
 	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	badRec := httptest.NewRecorder()
@@ -416,6 +433,23 @@ func TestOpenAIAccountControlsRenderAndMutationsRequireCSRF(t *testing.T) {
 		t.Fatalf("return URL = %q", authentication.returnURL)
 	}
 
+	fetchReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/browser", strings.NewReader(form.Encode()))
+	fetchReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	fetchReq.Header.Set("Origin", "http://127.0.0.1:18081")
+	fetchReq.Header.Set(dashboardFetchHeader, "fetch")
+	fetchReq.Host = "brainslug:8081"
+	fetchRec := httptest.NewRecorder()
+	dashboard.HandleOpenAIBrowserStart(fetchRec, fetchReq)
+	var fetchResult struct {
+		Location string `json:"location"`
+	}
+	if fetchRec.Code != http.StatusOK || json.NewDecoder(fetchRec.Body).Decode(&fetchResult) != nil {
+		t.Fatalf("browser fetch response = %d %q", fetchRec.Code, fetchRec.Body.String())
+	}
+	if !strings.HasPrefix(fetchResult.Location, "https://auth.openai.com/") {
+		t.Fatalf("browser fetch location = %q", fetchResult.Location)
+	}
+
 	bad := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/browser", http.NoBody)
 	badRec := httptest.NewRecorder()
 	dashboard.HandleOpenAIBrowserStart(badRec, bad)
@@ -494,5 +528,19 @@ func TestHandleStylesServesEmbeddedCSS(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), ".metric:first-child { padding-left: 0") || strings.Contains(rec.Body.String(), ".metric:nth-child(odd) { padding-left: 0") {
 		t.Error("overview metric alignment still removes left padding")
+	}
+}
+
+func TestHandleScriptsServesSameOriginFormTransport(t *testing.T) {
+	dashboard := NewDashboard(&fakeStore{})
+	rec := httptest.NewRecorder()
+	dashboard.HandleScripts(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/assets/dashboard.js", http.NoBody))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "text/javascript") {
+		t.Fatalf("script response = %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	for _, want := range []string{"fetch(action", "X-Brainslug-Dashboard", "window.location.assign", "auth.openai.com"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("dashboard script is missing %q", want)
+		}
 	}
 }

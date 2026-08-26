@@ -229,6 +229,7 @@ func buildAdminHandler(cfg *config.Config, controller web.InferenceController, d
 	mux.HandleFunc("GET /health", healthHandler(cfg, controller))
 	mux.HandleFunc("GET /history", dashboard.HandleHistory)
 	mux.HandleFunc("GET /assets/dashboard.css", dashboard.HandleStyles)
+	mux.HandleFunc("GET /assets/dashboard.js", dashboard.HandleScripts)
 	mux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
 	mux.HandleFunc("POST /auth/provider/api-key", dashboard.HandleAPIKeySave)
 	mux.HandleFunc("POST /auth/provider/api-key/remove", dashboard.HandleAPIKeyRemove)

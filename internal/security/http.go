@@ -10,8 +10,9 @@ import (
 )
 
 // contentSecurityPolicy allows only same-origin resources. The dashboard's
-// styles are inline, which is why style-src permits 'unsafe-inline'; there is
-// no script on the page and script-src stays locked to 'self'.
+// styles are inline, which is why style-src permits 'unsafe-inline'. Its small
+// form transport is served from the same origin, so script-src stays locked to
+// 'self'.
 const contentSecurityPolicy = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; " +
 	"form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
 

@@ -135,6 +135,8 @@ browser submissions. These are defense-in-depth controls for a loopback-only
 surface, not remote-user authentication. A valid browser-reported HTTP
 loopback origin is accepted when local port forwarding rewrites the backend
 Host header; non-loopback origins must still match the request origin exactly.
+The dashboard sends mutations with same-origin `fetch` and follows only local
+redirects or the validated `https://auth.openai.com` authorization target.
 
 The public hostname should return 404 for:
 
