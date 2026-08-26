@@ -41,8 +41,8 @@
       if (form.dataset.submitting === "true") return;
 
       const submitter = event.submitter;
-      const action = submitter?.formAction || form.action;
-      const method = submitter?.formMethod || form.method || "post";
+      const action = submitter?.hasAttribute("formaction") ? submitter.formAction : form.action;
+      const method = submitter?.hasAttribute("formmethod") ? submitter.formMethod : form.method || "post";
       const fields = new URLSearchParams();
       for (const [name, value] of new FormData(form)) {
         if (typeof value === "string") fields.append(name, value);

@@ -538,7 +538,7 @@ func TestHandleScriptsServesSameOriginFormTransport(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "text/javascript") {
 		t.Fatalf("script response = %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"fetch(action", "X-Brainslug-Dashboard", "window.location.assign", "auth.openai.com"} {
+	for _, want := range []string{"fetch(action", `hasAttribute("formaction")`, "X-Brainslug-Dashboard", "window.location.assign", "auth.openai.com"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("dashboard script is missing %q", want)
 		}
