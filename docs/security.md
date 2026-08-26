@@ -132,7 +132,9 @@ The administrative listener contains private prompts and answers and has no remo
 
 Provider-setting changes use a per-process CSRF token and reject cross-origin
 browser submissions. These are defense-in-depth controls for a loopback-only
-surface, not remote-user authentication.
+surface, not remote-user authentication. A valid browser-reported HTTP
+loopback origin is accepted when local port forwarding rewrites the backend
+Host header; non-loopback origins must still match the request origin exactly.
 
 The public hostname should return 404 for:
 

@@ -94,6 +94,11 @@ with `PROVIDER_AUTH_FILE`. Environment variables and explicit secret files
 remain supported. The OpenAI provider also offers an explicit ChatGPT account
 mode.
 
+The dashboard may be opened through a local loopback port forward, such as
+`http://127.0.0.1:18081`. Brainslug uses that browser-visible origin for the
+post-login return even when the forwarder rewrites the backend `Host` header.
+Do not expose the forwarded administrative port beyond the local machine.
+
 For a native local process, **Connect** uses browser PKCE and a temporary
 loopback callback on port `1455`. It needs no router, firewall, tunnel, or
 public port forwarding. Keep it local. In Docker - or whenever `localhost:1455`

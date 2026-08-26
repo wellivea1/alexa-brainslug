@@ -632,23 +632,30 @@ func sameOrigin(r *http.Request) error {
 }
 
 // validatedDashboardOrigin returns the browser-visible origin after enforcing
-// the dashboard's same-origin boundary. Loopback aliases and ports are treated
-// as one local security boundary so host port forwarding does not turn a local
-// form submission into a false cross-origin rejection.
+// the dashboard's same-origin boundary. A valid HTTP loopback Origin remains
+// authoritative when a local port forward or container proxy rewrites Host to
+// an internal service name. All non-loopback origins must match exactly.
 func validatedDashboardOrigin(r *http.Request) (string, error) {
-	requestOrigin, ok := parseDashboardOrigin(requestOrigin(r))
-	if !ok {
-		return "", errors.New("cross-origin dashboard update rejected")
-	}
 	originHeader := strings.TrimSpace(r.Header.Get("Origin"))
 	if originHeader == "" {
+		requestOrigin, ok := parseDashboardOrigin(requestOrigin(r))
+		if !ok {
+			return "", errors.New("cross-origin dashboard update rejected")
+		}
 		return requestOrigin.String(), nil
 	}
 	origin, ok := parseDashboardOrigin(originHeader)
 	if !ok {
 		return "", errors.New("cross-origin dashboard update rejected")
 	}
-	if strings.EqualFold(origin.String(), requestOrigin.String()) || sameLoopbackOrigin(origin, requestOrigin) {
+	if origin.Scheme == schemeHTTP && isLoopbackHost(origin.Hostname()) {
+		return origin.String(), nil
+	}
+	requestOrigin, ok := parseDashboardOrigin(requestOrigin(r))
+	if !ok {
+		return "", errors.New("cross-origin dashboard update rejected")
+	}
+	if strings.EqualFold(origin.String(), requestOrigin.String()) {
 		return origin.String(), nil
 	}
 	return "", errors.New("cross-origin dashboard update rejected")
@@ -678,10 +685,6 @@ func parseDashboardOrigin(value string) (*url.URL, bool) {
 	parsed.Path = ""
 	parsed.RawPath = ""
 	return parsed, true
-}
-
-func sameLoopbackOrigin(left, right *url.URL) bool {
-	return left.Scheme == right.Scheme && isLoopbackHost(left.Hostname()) && isLoopbackHost(right.Hostname())
 }
 
 func isLoopbackHost(host string) bool {

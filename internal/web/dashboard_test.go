@@ -404,7 +404,9 @@ func TestOpenAIAccountControlsRenderAndMutationsRequireCSRF(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/openai/browser", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://127.0.0.1:18081")
-	req.Host = "127.0.0.1:8081"
+	// A port forward or container proxy can preserve the browser Origin while
+	// rewriting Host to the backend service name.
+	req.Host = "brainslug:8081"
 	rec = httptest.NewRecorder()
 	dashboard.HandleOpenAIBrowserStart(rec, req)
 	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "https://auth.openai.com/") {
@@ -432,6 +434,7 @@ func TestSameOriginAllowsOnlyEquivalentLoopbackMappings(t *testing.T) {
 		{name: "exact origin", host: "127.0.0.1:8081", origin: "http://127.0.0.1:8081", allowed: true},
 		{name: "forwarded loopback port", host: "127.0.0.1:8081", origin: "http://127.0.0.1:18081", allowed: true},
 		{name: "loopback alias", host: "localhost:8081", origin: "http://127.0.0.1:18081", allowed: true},
+		{name: "proxy rewritten host", host: "brainslug:8081", origin: "http://127.0.0.1:18081", allowed: true},
 		{name: "cross-site host", host: "127.0.0.1:8081", origin: "https://example.com", allowed: false},
 		{name: "remote port mismatch", host: "admin.example:8081", origin: "http://admin.example:18081", allowed: false},
 		{name: "scheme mismatch", host: "127.0.0.1:8081", origin: "https://127.0.0.1:8081", allowed: false},
