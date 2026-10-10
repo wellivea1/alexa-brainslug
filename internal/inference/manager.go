@@ -17,11 +17,8 @@ import (
 )
 
 const (
-	openAIDefaultBaseURL    = "https://api.openai.com/v1"
-	anthropicDefaultBaseURL = "https://api.anthropic.com/v1"
-	maxManagedTimeout       = 60
-	maxManagedOutputTokens  = 128000
-	maxManagedAPIKeyBytes   = 16384
+	maxManagedOutputTokens = 128000
+	maxManagedAPIKeyBytes  = 16384
 )
 
 // APIKeyStore is the narrow credential persistence boundary used by the
@@ -59,6 +56,7 @@ type Update struct {
 	TimeoutSeconds  int
 	ReasoningEffort string
 	TextVerbosity   string
+	APIFormat       string
 }
 
 // Snapshot is a secret-free view suitable for health responses and the local
@@ -66,13 +64,16 @@ type Update struct {
 type Snapshot struct {
 	ActiveProvider string
 	SettingsPath   string
-	OpenAI         ProviderState
-	Compatible     ProviderState
-	Anthropic      ProviderState
+	Providers      []ProviderState
+
+	// Overrides lists environment variables that dashboard settings replace,
+	// so an operator editing .env can see why a change had no effect.
+	Overrides []config.Override
 }
 
 // ProviderState describes one configured provider without exposing its key.
 type ProviderState struct {
+	Definition           *config.ProviderDefinition
 	ID                   string
 	Name                 string
 	Active               bool
@@ -91,6 +92,17 @@ type ProviderState struct {
 	ManagedAPIKey        bool
 	ReasoningEffort      string
 	TextVerbosity        string
+	APIFormat            string
+}
+
+// Provider returns a route's secret-free state, or an empty state if absent.
+func (s Snapshot) Provider(id string) ProviderState {
+	for i := range s.Providers {
+		if s.Providers[i].ID == id {
+			return s.Providers[i]
+		}
+	}
+	return ProviderState{}
 }
 
 // NewManager builds a runtime manager around an already-configured service.
@@ -129,33 +141,20 @@ func (m *Manager) AttachAPIKeyStore(store APIKeyStore) error {
 	defer m.mu.Unlock()
 
 	candidate := m.cfg
-	fallbacks := map[string]apiKeyFallback{
-		config.ProviderOpenAI:           {key: candidate.OpenAI.APIKey, file: candidate.OpenAI.APIKeyFile},
-		config.ProviderOpenAICompatible: {key: candidate.Compatible.APIKey, file: candidate.Compatible.APIKeyFile},
-		config.ProviderAnthropic:        {key: candidate.Anthropic.APIKey, file: candidate.Anthropic.APIKeyFile},
-	}
-	managed := make(map[string]bool, 2)
-	if key, ok := store.Get(config.ProviderOpenAI); ok {
-		if err := validateManagedAPIKey(key); err != nil {
-			return fmt.Errorf("stored OpenAI credential: %w", err)
+	fallbacks := make(map[string]apiKeyFallback)
+	managed := make(map[string]bool)
+	for _, definition := range config.ProviderDefinitions() {
+		settings := definition.Settings(&candidate)
+		fallbacks[definition.ID] = apiKeyFallback{key: settings.APIKey, file: settings.APIKeyFile}
+		if key, ok := store.Get(definition.ID); ok {
+			if err := validateManagedAPIKey(key); err != nil {
+				return fmt.Errorf("stored %s credential: %w", definition.Name, err)
+			}
+			settings.APIKey = strings.TrimSpace(key)
+			managed[definition.ID] = true
 		}
-		candidate.OpenAI.APIKey = strings.TrimSpace(key)
-		managed[config.ProviderOpenAI] = true
 	}
-	if key, ok := store.Get(config.ProviderOpenAICompatible); ok {
-		if err := validateManagedAPIKey(key); err != nil {
-			return fmt.Errorf("stored OpenAI-compatible credential: %w", err)
-		}
-		candidate.Compatible.APIKey = strings.TrimSpace(key)
-		managed[config.ProviderOpenAICompatible] = true
-	}
-	if key, ok := store.Get(config.ProviderAnthropic); ok {
-		if err := validateManagedAPIKey(key); err != nil {
-			return fmt.Errorf("stored Anthropic credential: %w", err)
-		}
-		candidate.Anthropic.APIKey = strings.TrimSpace(key)
-		managed[config.ProviderAnthropic] = true
-	}
+
 	if err := candidate.Validate(); err != nil {
 		return err
 	}
@@ -178,6 +177,23 @@ func (m *Manager) Snapshot() Snapshot {
 	return m.snapshotFromConfig()
 }
 
+// SetCodex persists gateway control settings through the same serialized writer
+// as provider settings, so one dashboard cannot overwrite the other's choices.
+func (m *Manager) SetCodex(settings config.CodexConfig) error {
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	candidate := m.cfg
+	candidate.Codex = settings
+	if err := config.SaveRuntimeSettings(candidate.RuntimeSettingsPath, config.RuntimeSettingsFromConfig(&candidate)); err != nil {
+		return err
+	}
+	m.cfg = candidate
+	return nil
+}
+
 // Update validates, persists, and activates one provider configuration. The
 // new provider is constructed before any state changes, and the settings file
 // is written before the live service is swapped.
@@ -190,7 +206,7 @@ func (m *Manager) Update(update Update) error {
 	model := strings.TrimSpace(update.Model)
 	baseURL := strings.TrimSpace(update.BaseURL)
 	if !supportedProvider(providerID) {
-		return errors.New("provider must be OpenAI, OpenAI-compatible, or Anthropic")
+		return fmt.Errorf("provider must be one of %s", config.ProviderIDs())
 	}
 	if model == "" {
 		return errors.New("model is required")
@@ -201,56 +217,46 @@ func (m *Manager) Update(update Update) error {
 	if update.MaxOutputTokens < 16 || update.MaxOutputTokens > maxManagedOutputTokens {
 		return fmt.Errorf("maximum output tokens must be between 16 and %d", maxManagedOutputTokens)
 	}
-	if update.TimeoutSeconds < 1 || update.TimeoutSeconds > maxManagedTimeout {
-		return fmt.Errorf("timeout must be between 1 and %d seconds", maxManagedTimeout)
+	if update.TimeoutSeconds < 1 || update.TimeoutSeconds > config.MaxProviderTimeoutSeconds {
+		return fmt.Errorf("timeout must be between 1 and %d seconds: Alexa abandons a response after 8 seconds", config.MaxProviderTimeoutSeconds)
 	}
 
 	candidate.Provider = providerID
-	switch providerID {
-	case config.ProviderOpenAI:
+	definition, _ := config.LookupProvider(providerID)
+	settings := definition.Settings(&candidate)
+	settings.Model = model
+	settings.BaseURL = baseURL
+	settings.MaxOutputTokens = update.MaxOutputTokens
+	settings.Timeout = time.Duration(update.TimeoutSeconds) * time.Second
+	if definition.ResponseControls {
+		settings.ReasoningEffort = strings.ToLower(strings.TrimSpace(update.ReasoningEffort))
+		settings.TextVerbosity = strings.ToLower(strings.TrimSpace(update.TextVerbosity))
+	}
+	if definition.SelectableFormat && strings.TrimSpace(update.APIFormat) != "" {
+		settings.APIFormat = strings.ToLower(strings.TrimSpace(update.APIFormat))
+	}
+	if definition.AccountAuth {
 		authMode := strings.ToLower(strings.TrimSpace(update.AuthMode))
 		if authMode == "" {
-			authMode = candidate.OpenAI.AuthMode
+			authMode = settings.AuthMode
 		}
 		if authMode != config.OpenAIAuthModeAPIKey && authMode != config.OpenAIAuthModeChatGPT {
 			return errors.New("OpenAI authentication must be API key or ChatGPT account")
 		}
-		candidate.OpenAI.AuthMode = authMode
-		candidate.OpenAI.Model = model
-		candidate.OpenAI.BaseURL = baseURL
-		candidate.OpenAI.MaxOutputTokens = update.MaxOutputTokens
-		candidate.OpenAI.Timeout = time.Duration(update.TimeoutSeconds) * time.Second
-		candidate.OpenAI.ReasoningEffort = strings.ToLower(strings.TrimSpace(update.ReasoningEffort))
-		candidate.OpenAI.TextVerbosity = strings.ToLower(strings.TrimSpace(update.TextVerbosity))
-		if authMode == config.OpenAIAuthModeAPIKey && strings.TrimSpace(candidate.OpenAI.APIKey) == "" {
-			return errors.New("OpenAI credential is not configured; set OPENAI_API_KEY or OPENAI_API_KEY_FILE")
-		}
+		settings.AuthMode = authMode
 		if authMode == config.OpenAIAuthModeChatGPT && (m.chatGPT == nil || !m.chatGPT.Connected()) {
 			return errors.New("ChatGPT account is not connected; connect it before selecting this authentication method")
 		}
-	case config.ProviderOpenAICompatible:
-		candidate.Compatible.AuthMode = config.OpenAIAuthModeAPIKey
-		candidate.Compatible.Model = model
-		candidate.Compatible.BaseURL = baseURL
-		candidate.Compatible.MaxOutputTokens = update.MaxOutputTokens
-		candidate.Compatible.Timeout = time.Duration(update.TimeoutSeconds) * time.Second
-		candidate.Compatible.ReasoningEffort = strings.ToLower(strings.TrimSpace(update.ReasoningEffort))
-		candidate.Compatible.TextVerbosity = strings.ToLower(strings.TrimSpace(update.TextVerbosity))
-		if baseURL == "" {
-			return errors.New("OpenAI-compatible base URL is required")
-		}
-		if strings.TrimSpace(candidate.Compatible.APIKey) == "" {
-			return errors.New("OpenAI-compatible credential is not configured; save an API key here or set OPENAI_COMPATIBLE_API_KEY or OPENAI_COMPATIBLE_API_KEY_FILE")
-		}
-	case config.ProviderAnthropic:
-		candidate.Anthropic.Model = model
-		candidate.Anthropic.BaseURL = baseURL
-		candidate.Anthropic.MaxOutputTokens = update.MaxOutputTokens
-		candidate.Anthropic.Timeout = time.Duration(update.TimeoutSeconds) * time.Second
-		if strings.TrimSpace(candidate.Anthropic.APIKey) == "" {
-			return errors.New("anthropic credential is not configured; save an API key here or set ANTHROPIC_API_KEY or ANTHROPIC_API_KEY_FILE")
-		}
+	} else {
+		settings.AuthMode = config.OpenAIAuthModeAPIKey
 	}
+	if definition.RequireBaseURL && baseURL == "" {
+		return fmt.Errorf("%s base URL is required", definition.Name)
+	}
+	if settings.AuthMode != config.OpenAIAuthModeChatGPT && strings.TrimSpace(settings.APIKey) == "" {
+		return fmt.Errorf("%s credential is not configured; save an API key here or set %s_API_KEY or %s_API_KEY_FILE", definition.Name, definition.EnvPrefix, definition.EnvPrefix)
+	}
+
 	if err := candidate.Validate(); err != nil {
 		return err
 	}
@@ -261,12 +267,7 @@ func (m *Manager) Update(update Update) error {
 	if err := config.SaveRuntimeSettings(candidate.RuntimeSettingsPath, config.RuntimeSettingsFromConfig(&candidate)); err != nil {
 		return err
 	}
-	if err := m.application.Reconfigure(app.Options{
-		Model:           candidate.SelectedModel(),
-		MaxOutputTokens: candidate.SelectedMaxOutputTokens(),
-		SaveHistory:     candidate.SaveHistory,
-		Secrets:         candidate.SecretValues(),
-	}, providers.AsAppProvider(provider)); err != nil {
+	if err := m.activateProviderLocked(&candidate, provider); err != nil {
 		return err
 	}
 	m.cfg = candidate
@@ -280,7 +281,7 @@ func (m *Manager) SetAPIKey(providerID, key string) error {
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	key = strings.TrimSpace(key)
 	if !supportedProvider(providerID) {
-		return errors.New("provider must be OpenAI, OpenAI-compatible, or Anthropic")
+		return fmt.Errorf("provider must be one of %s", config.ProviderIDs())
 	}
 	if err := validateManagedAPIKey(key); err != nil {
 		return err
@@ -292,14 +293,8 @@ func (m *Manager) SetAPIKey(providerID, key string) error {
 		return errors.New("provider credential storage is unavailable")
 	}
 	candidate := m.cfg
-	switch providerID {
-	case config.ProviderOpenAI:
-		candidate.OpenAI.APIKey = key
-	case config.ProviderOpenAICompatible:
-		candidate.Compatible.APIKey = key
-	case config.ProviderAnthropic:
-		candidate.Anthropic.APIKey = key
-	}
+	candidate.ProviderSettings(providerID).APIKey = key
+
 	if err := candidate.Validate(); err != nil {
 		return err
 	}
@@ -311,12 +306,7 @@ func (m *Manager) SetAPIKey(providerID, key string) error {
 	if err := m.apiKeys.Set(providerID, key); err != nil {
 		return err
 	}
-	if err := m.application.Reconfigure(app.Options{
-		Model:           candidate.SelectedModel(),
-		MaxOutputTokens: candidate.SelectedMaxOutputTokens(),
-		SaveHistory:     candidate.SaveHistory,
-		Secrets:         candidate.SecretValues(),
-	}, providers.AsAppProvider(provider)); err != nil {
+	if err := m.activateProviderLocked(&candidate, provider); err != nil {
 		return errors.Join(err, m.restoreStoredKey(providerID, previous, hadPrevious))
 	}
 	m.cfg = candidate
@@ -329,7 +319,7 @@ func (m *Manager) SetAPIKey(providerID, key string) error {
 func (m *Manager) ClearAPIKey(providerID string) error {
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	if !supportedProvider(providerID) {
-		return errors.New("provider must be OpenAI, OpenAI-compatible, or Anthropic")
+		return fmt.Errorf("provider must be one of %s", config.ProviderIDs())
 	}
 
 	m.mu.Lock()
@@ -343,17 +333,10 @@ func (m *Manager) ClearAPIKey(providerID string) error {
 	previous, _ := m.apiKeys.Get(providerID)
 	fallback := m.fallbacks[providerID]
 	candidate := m.cfg
-	switch providerID {
-	case config.ProviderOpenAI:
-		candidate.OpenAI.APIKey = fallback.key
-		candidate.OpenAI.APIKeyFile = fallback.file
-	case config.ProviderOpenAICompatible:
-		candidate.Compatible.APIKey = fallback.key
-		candidate.Compatible.APIKeyFile = fallback.file
-	case config.ProviderAnthropic:
-		candidate.Anthropic.APIKey = fallback.key
-		candidate.Anthropic.APIKeyFile = fallback.file
-	}
+	settings := candidate.ProviderSettings(providerID)
+	settings.APIKey = fallback.key
+	settings.APIKeyFile = fallback.file
+
 	if err := candidate.Validate(); err != nil {
 		return err
 	}
@@ -364,12 +347,7 @@ func (m *Manager) ClearAPIKey(providerID string) error {
 	if err := m.apiKeys.Remove(providerID); err != nil {
 		return err
 	}
-	if err := m.application.Reconfigure(app.Options{
-		Model:           candidate.SelectedModel(),
-		MaxOutputTokens: candidate.SelectedMaxOutputTokens(),
-		SaveHistory:     candidate.SaveHistory,
-		Secrets:         candidate.SecretValues(),
-	}, providers.AsAppProvider(provider)); err != nil {
+	if err := m.activateProviderLocked(&candidate, provider); err != nil {
 		return errors.Join(err, m.apiKeys.Set(providerID, previous))
 	}
 	m.cfg = candidate
@@ -402,12 +380,7 @@ func (m *Manager) SetOpenAIAuthMode(authMode string) error {
 		if err != nil {
 			return err
 		}
-		if err := m.application.Reconfigure(app.Options{
-			Model:           candidate.SelectedModel(),
-			MaxOutputTokens: candidate.SelectedMaxOutputTokens(),
-			SaveHistory:     candidate.SaveHistory,
-			Secrets:         candidate.SecretValues(),
-		}, providers.AsAppProvider(provider)); err != nil {
+		if err := m.activateProviderLocked(&candidate, provider); err != nil {
 			return err
 		}
 	}
@@ -417,82 +390,37 @@ func (m *Manager) SetOpenAIAuthMode(authMode string) error {
 
 func (m *Manager) snapshotFromConfig() Snapshot {
 	cfg := &m.cfg
-	chatGPTConnected := m.chatGPT != nil && m.chatGPT.Connected()
-	openAIAuthMode := cfg.OpenAI.AuthMode
-	if openAIAuthMode == "" {
-		openAIAuthMode = config.OpenAIAuthModeAPIKey
-	}
-	openAICredentialConfigured := strings.TrimSpace(cfg.OpenAI.APIKey) != ""
-	openAICredentialSource := m.credentialSource(config.ProviderOpenAI, cfg.OpenAI.APIKey, cfg.OpenAI.APIKeyFile)
-	openAIEndpoint := "Official OpenAI Responses API"
-	effectiveOpenAIEndpoint := openAIDefaultBaseURL
-	if openAIAuthMode == config.OpenAIAuthModeChatGPT {
-		openAICredentialConfigured = chatGPTConnected
-		if chatGPTConnected {
-			openAICredentialSource = "ChatGPT account" //nolint:gosec // G101: operator-facing source label, not a credential.
-		} else {
-			openAICredentialSource = "Not connected"
+	snapshot := Snapshot{ActiveProvider: cfg.Provider, SettingsPath: cfg.RuntimeSettingsPath, Overrides: cfg.Overrides()}
+	for _, definition := range config.ProviderDefinitions() {
+		settings := definition.Settings(cfg)
+		source := m.credentialSource(definition.ID, settings.APIKey, settings.APIKeyFile)
+		state := ProviderState{
+			Definition: definition, ID: definition.ID, Name: definition.Name, Active: cfg.Provider == definition.ID,
+			Model: settings.Model, BaseURL: settings.BaseURL, EffectiveBaseURL: firstNonEmpty(settings.BaseURL, definition.DefaultBaseURL),
+			EndpointKind: definition.EndpointKind, MaxOutputTokens: settings.MaxOutputTokens, TimeoutSeconds: durationSeconds(settings.Timeout),
+			CredentialConfigured: strings.TrimSpace(settings.APIKey) != "", CredentialSource: source,
+			APIKeyConfigured: strings.TrimSpace(settings.APIKey) != "", APIKeySource: source,
+			AuthMode: firstNonEmpty(settings.AuthMode, config.OpenAIAuthModeAPIKey), ManagedAPIKey: m.managedKeys[definition.ID],
+			ReasoningEffort: settings.ReasoningEffort, TextVerbosity: settings.TextVerbosity, APIFormat: definition.WireFormat(settings),
 		}
-		openAIEndpoint = "ChatGPT Codex Responses"
-		effectiveOpenAIEndpoint = "https://chatgpt.com/backend-api/codex/responses"
+		if definition.SelectableFormat && state.APIFormat == config.FormatChatCompletions {
+			state.EndpointKind = "Compatible Chat Completions API"
+		}
+		if definition.AccountAuth {
+			state.ChatGPTConnected = m.chatGPT != nil && m.chatGPT.Connected()
+			if state.AuthMode == config.OpenAIAuthModeChatGPT {
+				state.CredentialConfigured = state.ChatGPTConnected
+				state.CredentialSource = "Not connected"
+				if state.ChatGPTConnected {
+					state.CredentialSource = "ChatGPT account"
+				}
+				state.EndpointKind = "ChatGPT Codex Responses"
+				state.EffectiveBaseURL = "https://chatgpt.com/backend-api/codex/responses"
+			}
+		}
+		snapshot.Providers = append(snapshot.Providers, state)
 	}
-	return Snapshot{
-		ActiveProvider: cfg.Provider,
-		SettingsPath:   cfg.RuntimeSettingsPath,
-		OpenAI: ProviderState{
-			ID:                   config.ProviderOpenAI,
-			Name:                 "OpenAI",
-			Active:               cfg.Provider == config.ProviderOpenAI,
-			Model:                cfg.OpenAI.Model,
-			BaseURL:              cfg.OpenAI.BaseURL,
-			EffectiveBaseURL:     effectiveOpenAIEndpoint,
-			EndpointKind:         openAIEndpoint,
-			MaxOutputTokens:      cfg.OpenAI.MaxOutputTokens,
-			TimeoutSeconds:       durationSeconds(cfg.OpenAI.Timeout),
-			CredentialConfigured: openAICredentialConfigured,
-			CredentialSource:     openAICredentialSource,
-			AuthMode:             openAIAuthMode,
-			APIKeyConfigured:     strings.TrimSpace(cfg.OpenAI.APIKey) != "",
-			APIKeySource:         m.credentialSource(config.ProviderOpenAI, cfg.OpenAI.APIKey, cfg.OpenAI.APIKeyFile),
-			ChatGPTConnected:     chatGPTConnected,
-			ManagedAPIKey:        m.managedKeys[config.ProviderOpenAI],
-			ReasoningEffort:      cfg.OpenAI.ReasoningEffort,
-			TextVerbosity:        cfg.OpenAI.TextVerbosity,
-		},
-		Compatible: ProviderState{
-			ID:                   config.ProviderOpenAICompatible,
-			Name:                 "OpenAI-compatible",
-			Active:               cfg.Provider == config.ProviderOpenAICompatible,
-			Model:                cfg.Compatible.Model,
-			BaseURL:              cfg.Compatible.BaseURL,
-			EffectiveBaseURL:     cfg.Compatible.BaseURL,
-			EndpointKind:         "Compatible Responses API",
-			MaxOutputTokens:      cfg.Compatible.MaxOutputTokens,
-			TimeoutSeconds:       durationSeconds(cfg.Compatible.Timeout),
-			CredentialConfigured: strings.TrimSpace(cfg.Compatible.APIKey) != "",
-			CredentialSource:     m.credentialSource(config.ProviderOpenAICompatible, cfg.Compatible.APIKey, cfg.Compatible.APIKeyFile),
-			AuthMode:             config.OpenAIAuthModeAPIKey,
-			APIKeyConfigured:     strings.TrimSpace(cfg.Compatible.APIKey) != "",
-			APIKeySource:         m.credentialSource(config.ProviderOpenAICompatible, cfg.Compatible.APIKey, cfg.Compatible.APIKeyFile),
-			ManagedAPIKey:        m.managedKeys[config.ProviderOpenAICompatible],
-			ReasoningEffort:      cfg.Compatible.ReasoningEffort,
-			TextVerbosity:        cfg.Compatible.TextVerbosity,
-		},
-		Anthropic: ProviderState{
-			ID:                   config.ProviderAnthropic,
-			Name:                 "Anthropic",
-			Active:               cfg.Provider == config.ProviderAnthropic,
-			Model:                cfg.Anthropic.Model,
-			BaseURL:              cfg.Anthropic.BaseURL,
-			EffectiveBaseURL:     firstNonEmpty(cfg.Anthropic.BaseURL, anthropicDefaultBaseURL),
-			EndpointKind:         "Anthropic Messages API",
-			MaxOutputTokens:      cfg.Anthropic.MaxOutputTokens,
-			TimeoutSeconds:       durationSeconds(cfg.Anthropic.Timeout),
-			CredentialConfigured: strings.TrimSpace(cfg.Anthropic.APIKey) != "",
-			CredentialSource:     m.credentialSource(config.ProviderAnthropic, cfg.Anthropic.APIKey, cfg.Anthropic.APIKeyFile),
-			ManagedAPIKey:        m.managedKeys[config.ProviderAnthropic],
-		},
-	}
+	return snapshot
 }
 
 func (m *Manager) reconfigureLocked(candidate *config.Config) error {
@@ -500,6 +428,10 @@ func (m *Manager) reconfigureLocked(candidate *config.Config) error {
 	if err != nil {
 		return err
 	}
+	return m.activateProviderLocked(candidate, provider)
+}
+
+func (m *Manager) activateProviderLocked(candidate *config.Config, provider providers.Provider) error {
 	return m.application.Reconfigure(app.Options{
 		Model:           candidate.SelectedModel(),
 		MaxOutputTokens: candidate.SelectedMaxOutputTokens(),
@@ -548,7 +480,8 @@ func validateBaseURL(value string) error {
 }
 
 func supportedProvider(providerID string) bool {
-	return providerID == config.ProviderOpenAI || providerID == config.ProviderOpenAICompatible || providerID == config.ProviderAnthropic
+	_, ok := config.LookupProvider(providerID)
+	return ok
 }
 
 func credentialSource(apiKey, apiKeyFile string) string {

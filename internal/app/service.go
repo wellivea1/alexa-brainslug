@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wellivea1/alexa-brainslug/internal/prompts"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
 )
 
@@ -46,7 +45,16 @@ var (
 
 	// ErrProviderFailed is the stable category for other provider failures.
 	ErrProviderFailed = errors.New("provider failed")
+
+	// ErrRequestCanceled means the caller went away before the provider
+	// answered. It is recorded so history does not blame the provider.
+	ErrRequestCanceled = errors.New("request was canceled by the caller")
 )
+
+// persistTimeout bounds saving one outcome. When the caller's context has a
+// deadline, the provider call ends this much earlier, so a provider that uses
+// all of its time still leaves room to record what happened.
+const persistTimeout = time.Second
 
 const (
 	// StatusOK records a completed provider response.
@@ -73,15 +81,15 @@ type AskRequest struct {
 	Principal      Principal
 	ConversationID string
 	Prompt         string
+	SystemPrompt   string
 }
 
 // Answer is a completed provider result in transport-neutral form.
 type Answer struct {
-	ShortAnswer string
-	FullAnswer  string
-	Provider    string
-	Model       string
-	Latency     time.Duration
+	FullAnswer string
+	Provider   string
+	Model      string
+	Latency    time.Duration
 }
 
 // ProviderRequest is the provider-independent input needed by the application.
@@ -95,11 +103,10 @@ type ProviderRequest struct {
 
 // ProviderResponse is the provider-independent result used by the application.
 type ProviderResponse struct {
-	ShortAnswer string
-	FullAnswer  string
-	Provider    string
-	Model       string
-	Latency     time.Duration
+	FullAnswer string
+	Provider   string
+	Model      string
+	Latency    time.Duration
 }
 
 // Provider is the outbound model capability the application requires.
@@ -120,11 +127,13 @@ type Interaction struct {
 	Provider       string
 	Model          string
 	Prompt         string
-	ShortAnswer    string
-	FullAnswer     string
-	Latency        time.Duration
-	Status         string
-	ErrorMessage   string
+	// ShortAnswer is a legacy summary read from existing history. New
+	// interactions store the full answer; inbound adapters shape their output.
+	ShortAnswer  string
+	FullAnswer   string
+	Latency      time.Duration
+	Status       string
+	ErrorMessage string
 }
 
 // Repository is the persistence capability the application requires.
@@ -193,13 +202,20 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (Answer, error) {
 		return Answer{}, ErrProviderNotConfigured
 	}
 
+	providerCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok && opts.SaveHistory && s.repository != nil {
+		var cancel context.CancelFunc
+		providerCtx, cancel = context.WithDeadline(ctx, deadline.Add(-persistTimeout))
+		defer cancel()
+	}
+
 	started := time.Now()
-	providerResp, err := provider.Ask(ctx, ProviderRequest{
+	providerResp, err := provider.Ask(providerCtx, ProviderRequest{
 		Principal:       req.Principal,
 		Prompt:          prompt,
 		Model:           opts.Model,
 		MaxOutputTokens: opts.MaxOutputTokens,
-		SystemPrompt:    prompts.DefaultSystemPrompt,
+		SystemPrompt:    req.SystemPrompt,
 	})
 
 	latency := providerResp.Latency
@@ -223,11 +239,10 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (Answer, error) {
 	}
 
 	answer := Answer{
-		ShortAnswer: strings.TrimSpace(providerResp.ShortAnswer),
-		FullAnswer:  strings.TrimSpace(providerResp.FullAnswer),
-		Provider:    firstNonEmpty(providerResp.Provider, provider.Name()),
-		Model:       firstNonEmpty(providerResp.Model, opts.Model),
-		Latency:     latency,
+		FullAnswer: strings.TrimSpace(providerResp.FullAnswer),
+		Provider:   firstNonEmpty(providerResp.Provider, provider.Name()),
+		Model:      firstNonEmpty(providerResp.Model, opts.Model),
+		Latency:    latency,
 	}
 
 	s.saveInteraction(ctx, Interaction{
@@ -236,7 +251,6 @@ func (s *Service) Ask(ctx context.Context, req AskRequest) (Answer, error) {
 		Provider:       answer.Provider,
 		Model:          answer.Model,
 		Prompt:         prompt,
-		ShortAnswer:    answer.ShortAnswer,
 		FullAnswer:     answer.FullAnswer,
 		Latency:        answer.Latency,
 		Status:         StatusOK,
@@ -260,26 +274,29 @@ func (s *Service) LatestAnswer(ctx context.Context, principal Principal) (Answer
 		return Answer{}, fmt.Errorf("load latest response: %w", err)
 	}
 
-	shortAnswer := strings.TrimSpace(latest.ShortAnswer)
-	fullAnswer := strings.TrimSpace(latest.FullAnswer)
-	if shortAnswer == "" && fullAnswer == "" {
+	fullAnswer := strings.TrimSpace(firstNonEmpty(latest.FullAnswer, latest.ShortAnswer))
+	if fullAnswer == "" {
 		return Answer{}, ErrEmptySavedAnswer
 	}
 
 	return Answer{
-		ShortAnswer: shortAnswer,
-		FullAnswer:  fullAnswer,
-		Provider:    latest.Provider,
-		Model:       latest.Model,
-		Latency:     latest.Latency,
+		FullAnswer: fullAnswer,
+		Provider:   latest.Provider,
+		Model:      latest.Model,
+		Latency:    latest.Latency,
 	}, nil
 }
 
+// saveInteraction records an outcome even when the caller's context has been
+// canceled or has expired: a request that ran out of time, or whose caller hung
+// up, is exactly the one an operator needs to see in history.
 func (s *Service) saveInteraction(ctx context.Context, interaction Interaction, saveHistory bool) {
 	if !saveHistory || s.repository == nil {
 		return
 	}
-	if _, err := s.repository.SaveInteraction(ctx, interaction); err != nil {
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
+	defer cancel()
+	if _, err := s.repository.SaveInteraction(saveCtx, interaction); err != nil {
 		slog.WarnContext(ctx, "save interaction", "error", err)
 	}
 }
@@ -295,10 +312,13 @@ func normalizeProviderError(err error) error {
 	case errors.Is(err, ErrProviderNotConfigured),
 		errors.Is(err, ErrProviderUnavailable),
 		errors.Is(err, ErrProviderNoText),
-		errors.Is(err, ErrProviderFailed):
+		errors.Is(err, ErrProviderFailed),
+		errors.Is(err, ErrRequestCanceled):
 		return err
 	case errors.Is(err, context.DeadlineExceeded):
 		return errors.Join(ErrProviderUnavailable, err)
+	case errors.Is(err, context.Canceled):
+		return errors.Join(ErrRequestCanceled, err)
 	default:
 		return errors.Join(ErrProviderFailed, err)
 	}

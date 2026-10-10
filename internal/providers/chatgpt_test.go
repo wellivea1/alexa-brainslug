@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,6 +65,35 @@ func TestChatGPTAskUsesAccountTransportAndNormalizesSSE(t *testing.T) {
 	}
 	if _, exists := rawPayload["max_output_tokens"]; exists {
 		t.Fatal("ChatGPT account request included unsupported max_output_tokens")
+	}
+}
+
+// slowRefreshCredentials models a token refresh that hangs until its context
+// ends.
+type slowRefreshCredentials struct{}
+
+func (slowRefreshCredentials) Connected() bool { return true }
+func (slowRefreshCredentials) Token(ctx context.Context) (accessToken, accountID string, err error) {
+	<-ctx.Done()
+	return "", "", ctx.Err()
+}
+
+// A token refresh spends the same voice budget as the model call, so the
+// provider timeout has to bound it. It used to run under the caller's context
+// alone, before the timeout was applied.
+func TestChatGPTTimeoutBoundsTokenRefresh(t *testing.T) {
+	provider := NewChatGPT(config.OpenAIConfig{Model: "gpt-test", Timeout: 50 * time.Millisecond}, slowRefreshCredentials{}, nil)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := provider.Ask(ctx, Request{Prompt: "question"})
+
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Ask() took %v; the provider timeout did not bound the refresh", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("Ask() error = %v, want a deadline error rather than not-configured", err)
 	}
 }
 

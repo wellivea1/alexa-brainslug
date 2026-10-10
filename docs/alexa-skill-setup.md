@@ -284,6 +284,8 @@ Test:
 - fallback;
 - session end.
 
+Help and fallback should end with "What should I ask?", and a bare question spoken in reply should be answered rather than sent back to fallback. Answering that prompt with "last response" should read the previous answer.
+
 ## Troubleshooting
 
 ### The interaction model does not build

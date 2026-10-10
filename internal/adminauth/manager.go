@@ -4,7 +4,6 @@
 package adminauth
 
 import (
-	"bytes"
 	"context"
 	"crypto/pbkdf2"
 	"crypto/rand"
@@ -14,13 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wellivea1/alexa-brainslug/internal/securefile"
 )
 
 const (
@@ -279,13 +278,8 @@ func (m *Manager) load() error {
 		return fmt.Errorf("read management credential file: %w", err)
 	}
 	var owner credentialFile
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&owner); err != nil {
+	if err := securefile.DecodeJSON(data, &owner); err != nil {
 		return fmt.Errorf("decode management credential file: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("decode management credential file: trailing data")
 	}
 	if owner.Version != credentialVersion {
 		return fmt.Errorf("management credential version must be %d", credentialVersion)
@@ -428,39 +422,16 @@ func validatePassword(value string) error {
 	return nil
 }
 
+// writeCredentialExclusive creates the owner file only if it does not exist,
+// so claiming first-run ownership is one atomic step.
 func writeCredentialExclusive(path string, owner credentialFile) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("create management credential directory: %w", err)
-	}
 	data, err := json.MarshalIndent(owner, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode management credential: %w", err)
 	}
-	// #nosec G304 -- path is the operator-configured credential path, not request input.
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create management credential file: %w", err)
+	if err := securefile.CreateExclusive(path, append(data, '\n')); err != nil {
+		return fmt.Errorf("save management credential file: %w", err)
 	}
-	removePartial := true
-	defer func() {
-		_ = file.Close()
-		if removePartial {
-			_ = os.Remove(path)
-		}
-	}()
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write management credential file: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync management credential file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close management credential file: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("protect management credential file: %w", err)
-	}
-	removePartial = false
 	return nil
 }
 

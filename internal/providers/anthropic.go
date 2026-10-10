@@ -6,13 +6,11 @@ import (
 	"strings"
 
 	"github.com/wellivea1/alexa-brainslug/internal/config"
-	"github.com/wellivea1/alexa-brainslug/internal/speech"
 )
 
 const (
-	defaultAnthropicBaseURL = "https://api.anthropic.com/v1"
-	anthropicMessagesPath   = "/messages"
-	anthropicName           = "anthropic"
+	anthropicMessagesPath = "/messages"
+	anthropicName         = "anthropic"
 
 	// anthropicVersion pins the Messages API wire format. Anthropic treats
 	// this header as required and uses it to keep breaking changes opt-in, so
@@ -28,8 +26,9 @@ type Anthropic struct {
 // NewAnthropic builds an Anthropic provider. Passing a nil client uses one
 // with the configured timeout; tests pass their own.
 func NewAnthropic(cfg config.AnthropicConfig, client *http.Client) *Anthropic {
+	definition, _ := config.LookupProvider(config.ProviderAnthropic)
 	return &Anthropic{
-		ep: newEndpoint(cfg.APIKey, cfg.BaseURL, defaultAnthropicBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
+		ep: newEndpoint(cfg.APIKey, cfg.BaseURL, definition.DefaultBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
 	}
 }
 
@@ -69,7 +68,6 @@ func (p *Anthropic) Ask(ctx context.Context, req Request) (Response, error) {
 	}
 
 	return Response{
-		ShortAnswer:  speech.Summarize(full, spokenWordLimit),
 		FullAnswer:   full,
 		Model:        firstNonEmpty(decoded.Model, resolved.model),
 		ProviderName: anthropicName,
@@ -84,10 +82,7 @@ type anthropicRequest struct {
 	Messages  []anthropicMessage `json:"messages"`
 }
 
-type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
+type anthropicMessage = Message
 
 type anthropicResponse struct {
 	Model   string             `json:"model"`

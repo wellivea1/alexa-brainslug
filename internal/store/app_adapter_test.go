@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -49,6 +50,48 @@ func TestAppRepositoryRoundTrip(t *testing.T) {
 	}
 	if interaction.Latency != 25*time.Millisecond {
 		t.Errorf("latency = %v", interaction.Latency)
+	}
+}
+
+type hangingProvider struct{}
+
+func (hangingProvider) Name() string { return "hanging" }
+
+func (hangingProvider) Ask(ctx context.Context, _ app.ProviderRequest) (app.ProviderResponse, error) {
+	<-ctx.Done()
+	return app.ProviderResponse{}, ctx.Err()
+}
+
+// Against the real database: when the caller hangs up before the provider
+// answers, the failure is still written. Saving under the caller's canceled
+// context used to discard it with "context canceled".
+func TestApplicationRecordsFailureAfterCallerHangsUp(t *testing.T) {
+	store, err := Open(t.Context(), filepath.Join(t.TempDir(), "brainslug.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	service := app.NewService(app.Options{Model: "model", SaveHistory: true}, hangingProvider{}, AsAppRepository(store))
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	if _, err := service.Ask(ctx, app.AskRequest{
+		Principal: app.Principal{Namespace: "alexa", Subject: "user-1"},
+		Prompt:    "question",
+	}); !errors.Is(err, app.ErrRequestCanceled) {
+		t.Fatalf("Ask() error = %v, want ErrRequestCanceled", err)
+	}
+
+	rows, err := store.ListRecent(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].Status != app.StatusError {
+		t.Fatalf("rows = %+v, want one recorded failure", rows)
 	}
 }
 

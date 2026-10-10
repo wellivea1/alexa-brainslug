@@ -15,6 +15,11 @@ type fakeProvider struct {
 	request  ProviderRequest
 	response ProviderResponse
 	err      error
+
+	// blockUntilDone makes Ask wait for its context, like a slow model.
+	blockUntilDone bool
+	deadline       time.Time
+	hasDeadline    bool
 }
 
 func (p *fakeProvider) Name() string {
@@ -24,8 +29,13 @@ func (p *fakeProvider) Name() string {
 	return p.name
 }
 
-func (p *fakeProvider) Ask(_ context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (p *fakeProvider) Ask(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
 	p.request = req
+	p.deadline, p.hasDeadline = ctx.Deadline()
+	if p.blockUntilDone {
+		<-ctx.Done()
+		return ProviderResponse{}, ctx.Err()
+	}
 	return p.response, p.err
 }
 
@@ -36,7 +46,11 @@ type fakeRepository struct {
 	loadErr error
 }
 
-func (r *fakeRepository) SaveInteraction(_ context.Context, interaction Interaction) (int64, error) {
+// SaveInteraction fails on a finished context, as database/sql does.
+func (r *fakeRepository) SaveInteraction(ctx context.Context, interaction Interaction) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if r.saveErr != nil {
 		return 0, r.saveErr
 	}
@@ -56,11 +70,10 @@ func (r *fakeRepository) GetLatestResponse(_ context.Context, _ Principal) (*Int
 
 func TestServiceAsk(t *testing.T) {
 	provider := &fakeProvider{response: ProviderResponse{
-		ShortAnswer: "  short answer  ",
-		FullAnswer:  "  full answer  ",
-		Provider:    "resolved-provider",
-		Model:       "resolved-model",
-		Latency:     25 * time.Millisecond,
+		FullAnswer: "  full answer  ",
+		Provider:   "resolved-provider",
+		Model:      "resolved-model",
+		Latency:    25 * time.Millisecond,
 	}}
 	repository := &fakeRepository{}
 	service := NewService(Options{
@@ -73,11 +86,12 @@ func TestServiceAsk(t *testing.T) {
 		Principal:      testPrincipal,
 		ConversationID: "session-1",
 		Prompt:         "  what is Go  ",
+		SystemPrompt:   "Write for a screen, preserving Markdown.",
 	})
 	if err != nil {
 		t.Fatalf("Ask() error = %v", err)
 	}
-	if answer.ShortAnswer != "short answer" || answer.FullAnswer != "full answer" {
+	if answer.FullAnswer != "full answer" {
 		t.Errorf("answer = %+v", answer)
 	}
 	if answer.Provider != "resolved-provider" || answer.Model != "resolved-model" {
@@ -92,8 +106,8 @@ func TestServiceAsk(t *testing.T) {
 	if provider.request.Model != "requested-model" || provider.request.MaxOutputTokens != 512 {
 		t.Errorf("provider request = %+v", provider.request)
 	}
-	if strings.TrimSpace(provider.request.SystemPrompt) == "" {
-		t.Error("provider system prompt is empty")
+	if provider.request.SystemPrompt != "Write for a screen, preserving Markdown." {
+		t.Errorf("adapter instructions were replaced: %q", provider.request.SystemPrompt)
 	}
 	if len(repository.saved) != 1 {
 		t.Fatalf("saved interactions = %d", len(repository.saved))
@@ -108,8 +122,8 @@ func TestServiceAsk(t *testing.T) {
 }
 
 func TestServiceReconfigureAppliesToSubsequentRequests(t *testing.T) {
-	initial := &fakeProvider{name: "openai", response: ProviderResponse{ShortAnswer: "initial"}}
-	next := &fakeProvider{name: "anthropic", response: ProviderResponse{ShortAnswer: "next"}}
+	initial := &fakeProvider{name: "openai", response: ProviderResponse{FullAnswer: "initial"}}
+	next := &fakeProvider{name: "anthropic", response: ProviderResponse{FullAnswer: "next"}}
 	service := NewService(Options{Model: "gpt-old", MaxOutputTokens: 128}, initial, nil)
 
 	if err := service.Reconfigure(Options{Model: "claude-new", MaxOutputTokens: 512}, next); err != nil {
@@ -160,6 +174,77 @@ func TestServiceAskRecordsRedactedProviderFailure(t *testing.T) {
 	}
 }
 
+// A caller that hangs up mid-request (Alexa giving up, a proxy dropping the
+// connection) must still leave a history record, and the record must not
+// blame the provider.
+func TestServiceAskRecordsOutcomeAfterCallerCancels(t *testing.T) {
+	repository := &fakeRepository{}
+	service := NewService(Options{Model: "m", SaveHistory: true}, &fakeProvider{blockUntilDone: true}, repository)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	_, err := service.Ask(ctx, AskRequest{Principal: testPrincipal, Prompt: "question"})
+
+	if !errors.Is(err, ErrRequestCanceled) || errors.Is(err, ErrProviderFailed) {
+		t.Fatalf("Ask() error = %v, want ErrRequestCanceled only", err)
+	}
+	if len(repository.saved) != 1 {
+		t.Fatalf("saved interactions = %d, want the canceled request recorded", len(repository.saved))
+	}
+	if saved := repository.saved[0]; saved.Status != StatusError || !strings.Contains(saved.ErrorMessage, "canceled") {
+		t.Errorf("saved interaction = %+v", saved)
+	}
+}
+
+func TestServiceAskRecordsOutcomeAfterDeadline(t *testing.T) {
+	repository := &fakeRepository{}
+	service := NewService(Options{Model: "m", SaveHistory: true}, &fakeProvider{blockUntilDone: true}, repository)
+
+	ctx, cancel := context.WithTimeout(t.Context(), persistTimeout+20*time.Millisecond)
+	defer cancel()
+	_, err := service.Ask(ctx, AskRequest{Principal: testPrincipal, Prompt: "question"})
+
+	if !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("Ask() error = %v, want ErrProviderUnavailable", err)
+	}
+	if len(repository.saved) != 1 {
+		t.Fatalf("saved interactions = %d, want the timed-out request recorded", len(repository.saved))
+	}
+}
+
+// The provider stops early enough to leave persistTimeout for the save, but
+// only when there is a save to make room for.
+func TestServiceAskReservesPersistenceTime(t *testing.T) {
+	tests := []struct {
+		name        string
+		saveHistory bool
+		reserve     time.Duration
+	}{
+		{"history enabled", true, persistTimeout},
+		{"history disabled", false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &fakeProvider{response: ProviderResponse{FullAnswer: "answer"}}
+			service := NewService(Options{SaveHistory: tt.saveHistory}, provider, &fakeRepository{})
+
+			deadline := time.Now().Add(5 * time.Second)
+			ctx, cancel := context.WithDeadline(t.Context(), deadline)
+			defer cancel()
+			if _, err := service.Ask(ctx, AskRequest{Principal: testPrincipal, Prompt: "question"}); err != nil {
+				t.Fatalf("Ask() error = %v", err)
+			}
+			if !provider.hasDeadline {
+				t.Fatal("provider context has no deadline")
+			}
+			if want := deadline.Add(-tt.reserve); !provider.deadline.Equal(want) {
+				t.Errorf("provider deadline = %v, want %v", provider.deadline, want)
+			}
+		})
+	}
+}
+
 func TestServiceAskNormalizesUnknownProviderFailure(t *testing.T) {
 	service := NewService(Options{}, &fakeProvider{err: errors.New("boom")}, nil)
 
@@ -195,7 +280,7 @@ func TestServiceAskHonorsHistoryDisabled(t *testing.T) {
 func TestServiceAskDoesNotFailWhenHistoryWriteFails(t *testing.T) {
 	service := NewService(
 		Options{SaveHistory: true},
-		&fakeProvider{response: ProviderResponse{ShortAnswer: "answer"}},
+		&fakeProvider{response: ProviderResponse{FullAnswer: "answer"}},
 		&fakeRepository{saveErr: errors.New("disk full")},
 	)
 
@@ -203,7 +288,7 @@ func TestServiceAskDoesNotFailWhenHistoryWriteFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ask() error = %v", err)
 	}
-	if answer.ShortAnswer != "answer" {
+	if answer.FullAnswer != "answer" {
 		t.Errorf("answer = %+v", answer)
 	}
 }
@@ -222,8 +307,40 @@ func TestServiceLatestAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestAnswer() error = %v", err)
 	}
-	if answer.ShortAnswer != "previous answer" || answer.FullAnswer != "full previous answer" {
+	if answer.FullAnswer != "full previous answer" {
 		t.Errorf("answer = %+v", answer)
+	}
+}
+
+func TestServicePreservesAdapterPresentation(t *testing.T) {
+	full := strings.TrimSpace("# Detailed answer\n\n" + strings.Repeat("**Keep this detail.** ", 150))
+	for _, instructions := range []string{"", "Use Markdown for a web page."} {
+		t.Run(instructions, func(t *testing.T) {
+			provider := &fakeProvider{response: ProviderResponse{FullAnswer: full}}
+			repository := &fakeRepository{}
+			service := NewService(Options{SaveHistory: true}, provider, repository)
+			answer, err := service.Ask(t.Context(), AskRequest{
+				Principal: testPrincipal, Prompt: "question", SystemPrompt: instructions,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if provider.request.SystemPrompt != instructions || answer.FullAnswer != full {
+				t.Fatal("the application changed the adapter's instructions or full answer")
+			}
+			if len(repository.saved) != 1 || repository.saved[0].FullAnswer != full || repository.saved[0].ShortAnswer != "" {
+				t.Fatal("history must preserve the full answer without creating a voice summary")
+			}
+		})
+	}
+}
+
+func TestServiceLatestAnswerReadsLegacySummary(t *testing.T) {
+	repository := &fakeRepository{latest: &Interaction{ShortAnswer: " legacy answer "}}
+	service := NewService(Options{SaveHistory: true}, &fakeProvider{}, repository)
+	answer, err := service.LatestAnswer(t.Context(), testPrincipal)
+	if err != nil || answer.FullAnswer != "legacy answer" {
+		t.Fatalf("legacy answer = %+v, error = %v", answer, err)
 	}
 }
 

@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -24,7 +25,6 @@ func (p *adapterProvider) Ask(_ context.Context, req Request) (Response, error) 
 
 func TestAppProviderMapsRequestAndResponse(t *testing.T) {
 	underlying := &adapterProvider{response: Response{
-		ShortAnswer:  "short",
 		FullAnswer:   "full",
 		ProviderName: "resolved-provider",
 		Model:        "resolved-model",
@@ -51,7 +51,7 @@ func TestAppProviderMapsRequestAndResponse(t *testing.T) {
 	if response.Provider != "resolved-provider" || response.Model != "resolved-model" {
 		t.Errorf("response = %+v", response)
 	}
-	if response.ShortAnswer != "short" || response.FullAnswer != "full" {
+	if response.FullAnswer != "full" {
 		t.Errorf("response = %+v", response)
 	}
 }
@@ -75,6 +75,7 @@ func TestAppProviderMapsErrors(t *testing.T) {
 		{"output limit", ErrOutputLimit, app.ErrProviderOutputLimit, app.ErrProviderNoText},
 		{"empty response", ErrEmptyResponse, app.ErrProviderNoText, nil},
 		{"deadline", context.DeadlineExceeded, app.ErrProviderUnavailable, nil},
+		{"caller canceled", fmt.Errorf("call provider: %w", context.Canceled), app.ErrRequestCanceled, nil},
 		{"incomplete", ErrIncompleteResponse, app.ErrProviderFailed, nil},
 		{"failed response", ErrFailedResponse, app.ErrProviderFailed, nil},
 		{"rate limit", &APIError{Provider: "fake", Status: 429}, app.ErrProviderUnavailable, nil},

@@ -20,6 +20,36 @@
           ]
         },
         {
+          "name": "CodexTaskIntent",
+          "slots": [{"name": "Query", "type": "AMAZON.SearchQuery"}],
+          "samples": ["ask codex to {Query}", "start a new codex task to {Query}", "use codex to {Query}"]
+        },
+        {
+          "name": "CodexContinueIntent",
+          "slots": [{"name": "Query", "type": "AMAZON.SearchQuery"}],
+          "samples": ["tell that task to {Query}", "continue codex with {Query}"]
+        },
+        {
+          "name": "CodexReplyIntent",
+          "slots": [{"name": "Query", "type": "AMAZON.SearchQuery"}],
+          "samples": ["reply to codex {Query}", "answer the codex question with {Query}"]
+        },
+        {
+          "name": "CodexStatusIntent",
+          "slots": [{"name": "Task", "type": "AMAZON.SearchQuery"}],
+          "samples": ["status of the task {Task}", "what is the status of {Task}", "latest task status", "codex task status"]
+        },
+        {
+          "name": "CodexResultIntent",
+          "slots": [{"name": "Task", "type": "AMAZON.SearchQuery"}],
+          "samples": ["read the result of {Task}", "latest codex result", "read the latest task result"]
+        },
+        {
+          "name": "CodexCancelTaskIntent",
+          "slots": [{"name": "Task", "type": "AMAZON.SearchQuery"}],
+          "samples": ["cancel the codex task {Task}", "cancel the latest codex task"]
+        },
+        {
           "name": "LastResponseIntent",
           "slots": [],
           "samples": [

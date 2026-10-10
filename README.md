@@ -15,7 +15,7 @@
   <img alt="Self-hosted" src="https://img.shields.io/badge/runtime-self--hosted-2F855A?style=flat-square">
 </p>
 
-> **You:** "Alexa, ask Brain Slug why the sky is blue."
+> **You:** "Alexa, ask Brain Slug about why the sky is blue."
 >
 > **Brainslug:** asks the provider you selected, speaks a concise answer, and
 > can save the complete exchange locally.
@@ -176,7 +176,7 @@ explicit; Brainslug does not silently fall back or substitute a model.
 | --- | --- | --- |
 | OpenAI | API key or secret file | Official Responses API |
 | OpenAI account | ChatGPT login | Optional account-scoped connector |
-| OAI Compat. | API key or local token | Explicit compatible base URL |
+| OAI Compat. | API key or local token | Explicit base URL and Responses or Chat Completions format |
 | Anthropic | Console API key or secret file | Direct Claude Messages API |
 
 To connect a ChatGPT account, open the dashboard and choose
@@ -190,6 +190,10 @@ cannot reach the Brainslug host, including many Docker or remote-shell setups.
 > depend on the account.
 
 OpenAI-compatible settings are independent from official OpenAI settings.
+Choose **API format** in the compatible dashboard panel, or set
+`OPENAI_COMPATIBLE_API_FORMAT=chat-completions` for servers that expose
+`/chat/completions`. The default remains `responses`. Each request uses the
+selected format; Brainslug does not probe or retry a different endpoint.
 Anthropic uses an Anthropic Console API key; a Claude Pro or Max subscription
 login is not an API credential.
 
@@ -260,6 +264,9 @@ Treat the database, auth files, and backups as private. Paths can be changed
 with `SQLITE_PATH`, `RUNTIME_SETTINGS_PATH`, `PROVIDER_AUTH_FILE`,
 `OPENAI_CHATGPT_AUTH_FILE`, and `ADMIN_AUTH_FILE`.
 
+New settings saves use version 3, with provider settings keyed by their stable
+IDs. Version 1 and 2 files are still read without rewriting them at startup.
+
 The management security review and residual operating requirements are in
 [`docs/security-audit.md`](docs/security-audit.md).
 
@@ -278,9 +285,14 @@ conventions, and the full local CI loop.
 
 ## Current limits
 
-Brainslug does not yet provide durable background jobs, restart recovery,
-request idempotency, rate or concurrency limits, a global spend cap, or history
-retention controls. The synchronous provider timeout defaults to six seconds.
+The optional Codex integration provides durable tasks, restart recovery,
+idempotency, bounded queue/concurrency, and operational retention through a
+separate controller and worker. It is disabled until explicitly paired; see
+[Codex operations](docs/codex-operations.md) for setup and pending release evidence.
+Manual direct answering remains synchronous and has no global spend or rate cap
+or ordinary-history retention controls. Each Alexa request has a seven-second response
+budget that covers verification, the provider call, and saving the outcome;
+provider timeouts default to, and are capped at, six seconds.
 
 Add operational limits before continuous unattended exposure. Longer ASK
 timeouts are not a substitute for a persisted deferred-job path.
@@ -294,6 +306,8 @@ timeouts are not a substitute for a persisted deferred-job path.
 - [Windows install and updates](docs/windows-install.md)
 - [Security](docs/security.md)
 - [Project plan](docs/project-plan.md)
+- [Codex integration plan](docs/codex-integration-plan.md)
+- [Codex setup, operations, and remaining release gates](docs/codex-operations.md)
 - [Progress checks](docs/progress-checks.md)
 - [MCP roadmap](docs/mcp-roadmap.md)
 

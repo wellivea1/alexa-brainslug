@@ -13,30 +13,47 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/app"
+	"github.com/wellivea1/alexa-brainslug/internal/speech"
 )
 
 // maxRequestBytes caps the Alexa request body. Real requests are a few
 // kilobytes; this bounds what a malicious caller can make the process read.
 const maxRequestBytes = 1 << 20
 
+// ResponseBudget bounds everything between receiving an ASK request and
+// returning its response: signature verification, the provider call, and
+// saving the outcome. Alexa abandons a skill response after eight seconds,
+// measured on Amazon's side, so the rest is left for the network and proxy.
+// A provider that is still running at the deadline is canceled, and the user
+// hears the busy message instead of Alexa's generic failure.
+const ResponseBudget = 7 * time.Second
+
 const alexaPrincipalNamespace = "alexa"
+
+// helpLastResponseExample is the retrieval phrase the help speech teaches. It
+// must stay an exact LastResponseIntent sample in skill/interaction-model.json,
+// because a one-shot request only routes through the model's samples.
+const helpLastResponseExample = "what was the last answer"
 
 // Spoken responses. They are constants because every one of them is user
 // experience: each is heard aloud, with no screen to fall back on.
+//
+// Help, fallback, and unknown-intent speech is followed by the Query
+// elicitation prompt from the dialog model, so it ends without a question.
 const (
 	speechReady        = "Brainslug is ready."
-	speechRepromptAsk  = "What should I ask?"
 	speechRepromptHelp = "Try asking Brain Slug a question."
 	speechGoodbye      = "Goodbye."
-	speechHelp         = "Say, ask Brain Slug, followed by your question. You can also say, last response, to hear the previous answer."
+	speechHelp         = "Brainslug sends your question to your chosen AI and reads you a short answer. " +
+		"To hear an answer again later, say, ask Brain Slug " + helpLastResponseExample + "."
 	speechNoQuery      = "What should I ask?"
 	speechNoQueryHint  = "Tell me the question to send."
-	speechFallback     = "I did not catch the question. Say ask, followed by what you want to know."
+	speechFallback     = "I did not catch that."
 	speechUnknownType  = "I did not recognize that Alexa request."
-	speechUnknownName  = "I do not know how to handle that request yet."
+	speechUnknownName  = "I cannot do that yet."
 	speechUnknownUser  = "I could not identify this Alexa account."
 	speechNoIntent     = "I did not catch the intent."
 	speechNoHistory    = "I do not have a previous response for you yet."
@@ -65,12 +82,14 @@ type ApplicationService interface {
 type Options struct {
 	// Verification controls Alexa request authentication.
 	Verification VerificationConfig
+	Tasks        TaskApplication
 }
 
 // Handler serves POST /alexa.
 type Handler struct {
 	application ApplicationService
 	verifier    *RequestVerifier
+	tasks       TaskApplication
 }
 
 // NewHandler builds the Alexa endpoint handler.
@@ -78,6 +97,7 @@ func NewHandler(opts Options, application ApplicationService) *Handler {
 	return &Handler{
 		application: application,
 		verifier:    NewRequestVerifier(opts.Verification),
+		tasks:       opts.Tasks,
 	}
 }
 
@@ -87,6 +107,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// One deadline covers the whole request, including a cold certificate
+	// fetch, so no single stage can spend the time another stage needs.
+	ctx, cancel := context.WithTimeout(r.Context(), ResponseBudget)
+	defer cancel()
+	r = r.WithContext(ctx)
 
 	// The raw bytes are kept because Alexa's signature covers the exact body.
 	// Re-encoding the parsed envelope would not verify.
@@ -106,12 +132,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Amazon specifies 400 for a request that fails verification. The
 		// reason is logged locally and never returned: an attacker probing
 		// the endpoint learns nothing about which check failed.
-		slog.WarnContext(r.Context(), "alexa request verification failed", "error", err)
+		slog.WarnContext(ctx, "alexa request verification failed", "error", err)
 		http.Error(w, "Alexa request verification failed", http.StatusBadRequest)
 		return
 	}
 
-	h.writeResponse(r.Context(), w, h.Route(r.Context(), &envelope))
+	h.writeResponse(ctx, w, h.Route(ctx, &envelope))
 }
 
 // Route dispatches an Alexa request to its handler.
@@ -133,26 +159,48 @@ func (h *Handler) handleIntent(ctx context.Context, envelope *RequestEnvelope) R
 		return NewAsk(speechNoIntent, speechRepromptHelp)
 	}
 
+	// Help, fallback, and unrecognized intents chain into the question dialog
+	// rather than leaving a bare open session. Every AskGPTIntent sample needs
+	// a carrier phrase, so outside dialog management a plain question cannot
+	// match any intent and would land in fallback again.
 	switch envelope.Request.Intent.Name {
 	case IntentAskGPT:
 		return h.handleAskGPT(ctx, envelope)
 	case IntentLastResponse, IntentRepeat:
 		return h.handleLastResponse(ctx, envelope)
+	case IntentCodexTask, IntentCodexStatus, IntentCodexResult, IntentCodexContinue, IntentCodexReply, IntentCodexCancel:
+		return h.handleCodex(ctx, envelope)
 	case IntentHelp:
-		return NewAsk(speechHelp, speechRepromptAsk)
+		return askForQuestion(speechHelp)
 	case IntentStop, IntentCancel:
 		return NewTell(speechGoodbye)
 	case IntentFallback:
-		return NewAsk(speechFallback, speechRepromptAsk)
+		return askForQuestion(speechFallback)
 	default:
-		return NewAsk(speechUnknownName, speechRepromptHelp)
+		return askForQuestion(speechUnknownName)
 	}
+}
+
+// askForQuestion speaks text and then lets the dialog model elicit the Query
+// slot, so the user's next utterance is accepted as the question itself.
+func askForQuestion(text string) ResponseEnvelope {
+	return NewDelegate(text, IntentAskGPT, slotQuery)
 }
 
 func (h *Handler) handleAskGPT(ctx context.Context, envelope *RequestEnvelope) ResponseEnvelope {
 	query := envelope.Request.Intent.SlotValue(slotQuery)
 	if query == "" {
-		return NewAsk(speechNoQuery, speechNoQueryHint)
+		// Alexa rejects a delegate back into a COMPLETED dialog's own intent.
+		if envelope.Request.DialogState == dialogStateCompleted {
+			return NewAsk(speechNoQuery, speechNoQueryHint)
+		}
+		return askForQuestion("")
+	}
+	if isLastResponseRequest(query) {
+		return h.handleLastResponse(ctx, envelope)
+	}
+	if h.tasks != nil && h.tasks.Automatic() {
+		return h.taskResponse(ctx, envelope, "", query, "")
 	}
 	if h.application == nil {
 		return NewTell(speechProviderMisconfig)
@@ -166,13 +214,14 @@ func (h *Handler) handleAskGPT(ctx context.Context, envelope *RequestEnvelope) R
 		Principal:      principal,
 		ConversationID: envelope.SessionID(),
 		Prompt:         query,
+		SystemPrompt:   voiceSystemPrompt,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "application question failed", "error", err)
 		return NewTell(speechForApplicationError(err))
 	}
 
-	shortAnswer := strings.TrimSpace(answer.ShortAnswer)
+	shortAnswer := speech.Summarize(answer.FullAnswer, spokenWordLimit)
 	if shortAnswer == "" {
 		shortAnswer = speechEmptyAnswer
 	}
@@ -216,10 +265,7 @@ func (h *Handler) handleLastResponse(ctx context.Context, envelope *RequestEnvel
 		}
 	}
 
-	answerText := strings.TrimSpace(answer.ShortAnswer)
-	if answerText == "" {
-		answerText = strings.TrimSpace(answer.FullAnswer)
-	}
+	answerText := speech.Summarize(answer.FullAnswer, spokenWordLimit)
 	if answerText == "" {
 		return NewTell(speechEmptyPrior)
 	}

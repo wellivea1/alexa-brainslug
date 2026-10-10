@@ -1,0 +1,30 @@
+{
+  "database": "data/worker/worker.db",
+  "tls": {
+    "certificate": "pki/dev-desktop.pem",
+    "key": "pki/dev-desktop.key",
+    "ca": "pki/ca.pem",
+    "server_name": "127.0.0.1"
+  },
+  "worker": {
+    "host_id": "dev-desktop",
+    "controller_url": "https://127.0.0.1:9091",
+    "codex_version": "0.162.0-alpha.2",
+    "retention_days": 7,
+    "projects": [{
+      "id": "disposable",
+      "root": "C:/REPLACE_WITH_AN_OWNER_CREATED_DISPOSABLE_DIRECTORY",
+      "profiles": [{
+        "model": "SET_EXPLICIT_WORKER_MODEL",
+        "effort": "medium",
+        "permission": "read-only",
+        "max_seconds": 300,
+        "max_tokens": 32000
+      }]
+    }]
+  },
+  "process": {
+    "executable": "C:/REPLACE_WITH_PINNED_CODEX_EXECUTABLE/codex.exe",
+    "expected_version": "0.162.0-alpha.2"
+  }
+}

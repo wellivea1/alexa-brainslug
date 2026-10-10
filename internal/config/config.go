@@ -36,8 +36,6 @@ const (
 	defaultSQLitePath                = "./brainslug.db"
 	defaultOpenAIMaxOutputTokens     = 25000
 	defaultCompatibleMaxOutputTokens = 4096
-	defaultOpenAIReasoningEffort     = ""
-	defaultOpenAITextVerbosity       = ""
 	defaultAnthropicMaxOutputTokens  = 4096
 	defaultTimeoutSeconds            = 6
 	defaultLogLevel                  = "info"
@@ -46,6 +44,12 @@ const (
 	// usable sentence.
 	minOutputTokens = 16
 )
+
+// MaxProviderTimeoutSeconds caps the provider call. Alexa abandons a skill
+// response after eight seconds, and the ASK response budget also covers
+// request verification and saving the outcome, so a longer provider timeout
+// could never be used: the request would be cut off first.
+const MaxProviderTimeoutSeconds = 6
 
 // Config is the validated runtime configuration.
 type Config struct {
@@ -66,6 +70,7 @@ type Config struct {
 	OpenAI     OpenAIConfig
 	Compatible OpenAIConfig
 	Anthropic  AnthropicConfig
+	Codex      CodexConfig
 
 	// SQLitePath is the local history database.
 	SQLitePath string
@@ -99,10 +104,19 @@ type Config struct {
 
 	// SaveHistory controls whether interactions are persisted.
 	SaveHistory bool
+
+	// Warnings describes configuration that was accepted but adjusted, for
+	// the caller to log once logging is configured.
+	Warnings []string
+
+	// environment is the configuration before dashboard settings were
+	// applied. Saving settings records only differences from it. It is
+	// shared, never modified, by copies of this Config.
+	environment *environmentBaseline
 }
 
-// OpenAIConfig holds OpenAI provider settings.
-type OpenAIConfig struct {
+// ProviderConfig holds the settings shared by outbound model transports.
+type ProviderConfig struct {
 	APIKey          string
 	APIKeyFile      string
 	AuthMode        string
@@ -113,17 +127,14 @@ type OpenAIConfig struct {
 	Timeout         time.Duration
 	ReasoningEffort string
 	TextVerbosity   string
+	APIFormat       string
 }
 
-// AnthropicConfig holds Anthropic provider settings.
-type AnthropicConfig struct {
-	APIKey          string
-	APIKeyFile      string
-	Model           string
-	BaseURL         string
-	MaxOutputTokens int
-	Timeout         time.Duration
-}
+// OpenAIConfig retains the constructor configuration name used by OpenAI clients.
+type OpenAIConfig = ProviderConfig
+
+// AnthropicConfig retains the constructor configuration name used by Anthropic clients.
+type AnthropicConfig = ProviderConfig
 
 // LoadDotEnv reads path and sets any variable that is not already present in
 // the process environment. A missing file is not an error.
@@ -183,37 +194,8 @@ func Load() (Config, error) {
 		ServerAddr:    env.str("SERVER_ADDR", defaultServerAddr),
 		PublicBaseURL: env.str("PUBLIC_BASE_URL", ""),
 		Provider:      strings.ToLower(env.str("AI_PROVIDER", ProviderOpenAI)),
-		OpenAI: OpenAIConfig{
-			APIKey:          env.str("OPENAI_API_KEY", ""),
-			APIKeyFile:      env.str("OPENAI_API_KEY_FILE", ""),
-			AuthMode:        strings.ToLower(env.str("OPENAI_AUTH_MODE", OpenAIAuthModeAPIKey)),
-			ChatGPTAuthFile: env.str("OPENAI_CHATGPT_AUTH_FILE", ""),
-			Model:           env.str("OPENAI_MODEL", ""),
-			BaseURL:         env.str("OPENAI_BASE_URL", ""),
-			MaxOutputTokens: env.intVal("OPENAI_MAX_OUTPUT_TOKENS", defaultOpenAIMaxOutputTokens),
-			Timeout:         env.seconds("OPENAI_TIMEOUT_SECONDS", defaultTimeoutSeconds),
-			ReasoningEffort: strings.ToLower(env.str("OPENAI_REASONING_EFFORT", defaultOpenAIReasoningEffort)),
-			TextVerbosity:   strings.ToLower(env.str("OPENAI_TEXT_VERBOSITY", defaultOpenAITextVerbosity)),
-		},
-		Compatible: OpenAIConfig{
-			APIKey:          env.str("OPENAI_COMPATIBLE_API_KEY", ""),
-			APIKeyFile:      env.str("OPENAI_COMPATIBLE_API_KEY_FILE", ""),
-			AuthMode:        OpenAIAuthModeAPIKey,
-			Model:           env.str("OPENAI_COMPATIBLE_MODEL", ""),
-			BaseURL:         env.str("OPENAI_COMPATIBLE_BASE_URL", ""),
-			MaxOutputTokens: env.intVal("OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS", defaultCompatibleMaxOutputTokens),
-			Timeout:         env.seconds("OPENAI_COMPATIBLE_TIMEOUT_SECONDS", defaultTimeoutSeconds),
-			ReasoningEffort: strings.ToLower(env.str("OPENAI_COMPATIBLE_REASONING_EFFORT", "")),
-			TextVerbosity:   strings.ToLower(env.str("OPENAI_COMPATIBLE_TEXT_VERBOSITY", "")),
-		},
-		Anthropic: AnthropicConfig{
-			APIKey:          env.str("ANTHROPIC_API_KEY", ""),
-			APIKeyFile:      env.str("ANTHROPIC_API_KEY_FILE", ""),
-			Model:           env.str("ANTHROPIC_MODEL", ""),
-			BaseURL:         env.str("ANTHROPIC_BASE_URL", ""),
-			MaxOutputTokens: env.intVal("ANTHROPIC_MAX_OUTPUT_TOKENS", defaultAnthropicMaxOutputTokens),
-			Timeout:         env.seconds("ANTHROPIC_TIMEOUT_SECONDS", defaultTimeoutSeconds),
-		},
+		Codex:         CodexConfig{Enabled: env.boolVal("CODEX_ENABLED", false), Mode: env.str("CODEX_ROUTING_MODE", "manual"), URL: env.str("CODEX_CONTROLLER_URL", ""), Certificate: env.str("CODEX_CLIENT_CERT", ""), Key: env.str("CODEX_CLIENT_KEY", ""), CA: env.str("CODEX_CA_FILE", ""), ServerName: env.str("CODEX_SERVER_NAME", "")},
+
 		SQLitePath:           env.str("SQLITE_PATH", defaultSQLitePath),
 		RuntimeSettingsPath:  env.str("RUNTIME_SETTINGS_PATH", ""),
 		ProviderAuthFile:     env.str("PROVIDER_AUTH_FILE", ""),
@@ -225,10 +207,36 @@ func Load() (Config, error) {
 		SaveHistory:          env.boolVal("SAVE_HISTORY", true),
 	}
 
+	for _, definition := range ProviderDefinitions() {
+		settings := definition.Settings(&cfg)
+		prefix := definition.EnvPrefix
+		*settings = ProviderConfig{
+			APIKey:          env.str(prefix+"_API_KEY", ""),
+			APIKeyFile:      env.str(prefix+"_API_KEY_FILE", ""),
+			Model:           env.str(prefix+"_MODEL", ""),
+			BaseURL:         env.str(prefix+"_BASE_URL", ""),
+			MaxOutputTokens: env.intVal(prefix+"_MAX_OUTPUT_TOKENS", definition.DefaultOutputTokens),
+			Timeout:         env.seconds(prefix+"_TIMEOUT_SECONDS", defaultTimeoutSeconds),
+			AuthMode:        OpenAIAuthModeAPIKey,
+		}
+		if definition.AccountAuth {
+			settings.AuthMode = strings.ToLower(env.str(prefix+"_AUTH_MODE", OpenAIAuthModeAPIKey))
+			settings.ChatGPTAuthFile = env.str(prefix+"_CHATGPT_AUTH_FILE", "")
+		}
+		if definition.ResponseControls {
+			settings.ReasoningEffort = strings.ToLower(env.str(prefix+"_REASONING_EFFORT", ""))
+			settings.TextVerbosity = strings.ToLower(env.str(prefix+"_TEXT_VERBOSITY", ""))
+		}
+		if definition.SelectableFormat {
+			settings.APIFormat = strings.ToLower(env.str(prefix+"_API_FORMAT", definition.Format))
+		}
+	}
+
 	if err := env.err(); err != nil {
 		return Config{}, err
 	}
 	cfg.migrateLegacyCompatibleEnvironment()
+	cfg.environment = &environmentBaseline{config: cfg, explicit: env.set}
 	if err := cfg.applyRuntimeSettingsFile(); err != nil {
 		return Config{}, err
 	}
@@ -249,25 +257,16 @@ func Load() (Config, error) {
 // *_FILE variable points at one. The file wins, so a stale inline value
 // cannot shadow a mounted secret.
 func (c *Config) loadSecretFiles() error {
-	sources := []struct {
-		variable string
-		path     string
-		target   *string
-	}{
-		{"OPENAI_API_KEY_FILE", c.OpenAI.APIKeyFile, &c.OpenAI.APIKey},
-		{"OPENAI_COMPATIBLE_API_KEY_FILE", c.Compatible.APIKeyFile, &c.Compatible.APIKey},
-		{"ANTHROPIC_API_KEY_FILE", c.Anthropic.APIKeyFile, &c.Anthropic.APIKey},
-	}
-
-	for _, source := range sources {
-		if strings.TrimSpace(source.path) == "" {
+	for _, definition := range ProviderDefinitions() {
+		settings := definition.Settings(c)
+		if strings.TrimSpace(settings.APIKeyFile) == "" {
 			continue
 		}
-		secret, err := ReadSecretFile(source.path)
+		secret, err := ReadSecretFile(settings.APIKeyFile)
 		if err != nil {
-			return fmt.Errorf("%s: %w", source.variable, err)
+			return fmt.Errorf("%s_API_KEY_FILE: %w", definition.EnvPrefix, err)
 		}
-		*source.target = secret
+		settings.APIKey = secret
 	}
 	return nil
 }
@@ -277,6 +276,9 @@ func (c *Config) loadSecretFiles() error {
 func (c *Config) Validate() error {
 	if c == nil {
 		return errors.New("configuration is required")
+	}
+	if err := c.Codex.Validate(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.ServerAddr) == "" {
 		return errors.New("SERVER_ADDR must not be empty")
@@ -288,47 +290,39 @@ func (c *Config) Validate() error {
 		return errors.New("ALEXA_ALLOWED_SKILL_ID must be set when ALEXA_VERIFY_REQUESTS=true")
 	}
 
-	switch c.Provider {
-	case ProviderOpenAI:
-		if isCustomOpenAIBaseURL(c.OpenAI.BaseURL) {
-			return errors.New("OPENAI_BASE_URL is a compatible endpoint; use AI_PROVIDER=openai-compatible and OPENAI_COMPATIBLE_BASE_URL")
-		}
-		if strings.TrimSpace(c.OpenAI.AuthMode) == "" {
-			c.OpenAI.AuthMode = OpenAIAuthModeAPIKey
-		}
-		if err := validateProvider("OPENAI", c.OpenAI.Model, c.OpenAI.MaxOutputTokens, c.OpenAI.Timeout); err != nil {
-			return err
-		}
-		if strings.TrimSpace(c.OpenAI.ReasoningEffort) != "" && !oneOf(c.OpenAI.ReasoningEffort, "none", "low", "medium", "high", "xhigh", "max") {
-			return errors.New("OPENAI_REASONING_EFFORT must be one of none, low, medium, high, xhigh, max")
-		}
-		if strings.TrimSpace(c.OpenAI.TextVerbosity) != "" && !oneOf(c.OpenAI.TextVerbosity, "low", "medium", "high") {
-			return errors.New("OPENAI_TEXT_VERBOSITY must be one of low, medium, high")
-		}
-		if !oneOf(c.OpenAI.AuthMode, OpenAIAuthModeAPIKey, OpenAIAuthModeChatGPT) {
-			return errors.New("OPENAI_AUTH_MODE must be one of api_key, chatgpt")
-		}
-		return nil
-	case ProviderOpenAICompatible:
-		if err := validateProvider("OPENAI_COMPATIBLE", c.Compatible.Model, c.Compatible.MaxOutputTokens, c.Compatible.Timeout); err != nil {
-			return err
-		}
-		if strings.TrimSpace(c.Compatible.BaseURL) == "" {
-			return errors.New("OPENAI_COMPATIBLE_BASE_URL must be set explicitly")
-		}
-		if strings.TrimSpace(c.Compatible.ReasoningEffort) != "" && !oneOf(c.Compatible.ReasoningEffort, "none", "low", "medium", "high", "xhigh", "max") {
-			return errors.New("OPENAI_COMPATIBLE_REASONING_EFFORT must be one of none, low, medium, high, xhigh, max")
-		}
-		if strings.TrimSpace(c.Compatible.TextVerbosity) != "" && !oneOf(c.Compatible.TextVerbosity, "low", "medium", "high") {
-			return errors.New("OPENAI_COMPATIBLE_TEXT_VERBOSITY must be one of low, medium, high")
-		}
-		c.Compatible.AuthMode = OpenAIAuthModeAPIKey
-		return nil
-	case ProviderAnthropic:
-		return validateProvider("ANTHROPIC", c.Anthropic.Model, c.Anthropic.MaxOutputTokens, c.Anthropic.Timeout)
-	default:
-		return fmt.Errorf("AI_PROVIDER must be one of %s, %s, %s", ProviderOpenAI, ProviderOpenAICompatible, ProviderAnthropic)
+	definition, ok := LookupProvider(c.Provider)
+	if !ok {
+		return fmt.Errorf("AI_PROVIDER must be one of %s", ProviderIDs())
 	}
+	settings := definition.Settings(c)
+	prefix := definition.EnvPrefix
+	if err := validateProvider(prefix, settings.Model, settings.MaxOutputTokens, settings.Timeout); err != nil {
+		return err
+	}
+	if definition.AccountAuth && isCustomOpenAIBaseURL(settings.BaseURL) {
+		return errors.New("OPENAI_BASE_URL is a compatible endpoint; use AI_PROVIDER=openai-compatible and OPENAI_COMPATIBLE_BASE_URL")
+	}
+	if definition.RequireBaseURL && strings.TrimSpace(settings.BaseURL) == "" {
+		return fmt.Errorf("%s_BASE_URL must be set explicitly", prefix)
+	}
+	if definition.ResponseControls {
+		if settings.ReasoningEffort != "" && !oneOf(settings.ReasoningEffort, "none", "low", "medium", "high", "xhigh", "max") {
+			return fmt.Errorf("%s_REASONING_EFFORT must be one of none, low, medium, high, xhigh, max", prefix)
+		}
+		if settings.TextVerbosity != "" && !oneOf(settings.TextVerbosity, "low", "medium", "high") {
+			return fmt.Errorf("%s_TEXT_VERBOSITY must be one of low, medium, high", prefix)
+		}
+	}
+	if definition.SelectableFormat && !oneOf(definition.WireFormat(settings), FormatResponses, FormatChatCompletions) {
+		return fmt.Errorf("%s_API_FORMAT must be one of %s, %s", prefix, FormatResponses, FormatChatCompletions)
+	}
+	if settings.AuthMode == "" || !definition.AccountAuth {
+		settings.AuthMode = OpenAIAuthModeAPIKey
+	}
+	if definition.AccountAuth && !oneOf(settings.AuthMode, OpenAIAuthModeAPIKey, OpenAIAuthModeChatGPT) {
+		return fmt.Errorf("%s_AUTH_MODE must be one of api_key, chatgpt", prefix)
+	}
+	return nil
 }
 
 func oneOf(value string, allowed ...string) bool {
@@ -350,54 +344,37 @@ func validateProvider(prefix, model string, maxOutputTokens int, timeout time.Du
 	if maxOutputTokens < minOutputTokens {
 		return fmt.Errorf("%s_MAX_OUTPUT_TOKENS must be at least %d", prefix, minOutputTokens)
 	}
-	if timeout <= 0 {
-		return fmt.Errorf("%s_TIMEOUT_SECONDS must be positive", prefix)
+	if timeout < time.Second || timeout > MaxProviderTimeoutSeconds*time.Second {
+		return fmt.Errorf("%s_TIMEOUT_SECONDS must be between 1 and %d: Alexa abandons a response after 8 seconds", prefix, MaxProviderTimeoutSeconds)
 	}
 	return nil
 }
 
 // SelectedModel reports the model the selected provider will use.
 func (c *Config) SelectedModel() string {
-	switch c.Provider {
-	case ProviderOpenAICompatible:
-		return c.Compatible.Model
-	case ProviderAnthropic:
-		return c.Anthropic.Model
-	default:
-		return c.OpenAI.Model
+	if settings := c.ProviderSettings(c.Provider); settings != nil {
+		return settings.Model
 	}
+	return ""
 }
 
 // SelectedMaxOutputTokens reports the output cap for the selected provider.
 func (c *Config) SelectedMaxOutputTokens() int {
-	switch c.Provider {
-	case ProviderOpenAICompatible:
-		return c.Compatible.MaxOutputTokens
-	case ProviderAnthropic:
-		return c.Anthropic.MaxOutputTokens
-	default:
-		return c.OpenAI.MaxOutputTokens
+	if settings := c.ProviderSettings(c.Provider); settings != nil {
+		return settings.MaxOutputTokens
 	}
-}
-
-// SelectedTimeout reports the provider HTTP timeout for the selected
-// provider.
-func (c *Config) SelectedTimeout() time.Duration {
-	switch c.Provider {
-	case ProviderOpenAICompatible:
-		return c.Compatible.Timeout
-	case ProviderAnthropic:
-		return c.Anthropic.Timeout
-	default:
-		return c.OpenAI.Timeout
-	}
+	return 0
 }
 
 // SecretValues returns every credential in the configuration, for redaction
 // before anything is logged or stored. Blank entries are harmless: redaction
 // ignores short values.
 func (c *Config) SecretValues() []string {
-	return []string{c.OpenAI.APIKey, c.Compatible.APIKey, c.Anthropic.APIKey}
+	secrets := make([]string, 0, len(providerDefinitions))
+	for _, definition := range ProviderDefinitions() {
+		secrets = append(secrets, definition.Settings(c).APIKey)
+	}
+	return secrets
 }
 
 // migrateLegacyCompatibleEnvironment preserves the original configuration
@@ -430,13 +407,27 @@ func isCustomOpenAIBaseURL(value string) bool {
 }
 
 // envReader reads environment variables and accumulates parse failures so
-// that Load can report all of them at once.
+// that Load can report all of them at once. It also records which variables
+// were set, so a dashboard value that replaces one can be reported.
 type envReader struct {
 	errs []error
+	set  map[string]bool
+}
+
+// lookup returns the trimmed value of key and records a nonempty one.
+func (r *envReader) lookup(key string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value != "" {
+		if r.set == nil {
+			r.set = make(map[string]bool)
+		}
+		r.set[key] = true
+	}
+	return value
 }
 
 func (r *envReader) str(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
+	value := r.lookup(key)
 	if value == "" {
 		return fallback
 	}
@@ -444,7 +435,7 @@ func (r *envReader) str(key, fallback string) string {
 }
 
 func (r *envReader) intVal(key string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
+	raw := r.lookup(key)
 	if raw == "" {
 		return fallback
 	}
@@ -457,7 +448,7 @@ func (r *envReader) intVal(key string, fallback int) int {
 }
 
 func (r *envReader) boolVal(key string, fallback bool) bool {
-	raw := strings.TrimSpace(os.Getenv(key))
+	raw := r.lookup(key)
 	if raw == "" {
 		return fallback
 	}

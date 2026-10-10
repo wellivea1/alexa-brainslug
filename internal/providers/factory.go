@@ -8,11 +8,6 @@ import (
 	"github.com/wellivea1/alexa-brainslug/internal/config"
 )
 
-// spokenWordLimit caps how many words Alexa speaks. It matches the limit the
-// system prompt asks the model to respect, so truncation is a backstop for
-// when the model overruns rather than the normal path.
-const spokenWordLimit = 120
-
 // NewConfigured builds the provider named by AI_PROVIDER.
 //
 // Passing a nil client lets each provider build its own with the configured
@@ -21,22 +16,30 @@ func NewConfigured(cfg *config.Config, client *http.Client, chatGPT ...ChatGPTCr
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: configuration is required", ErrNotConfigured)
 	}
-	switch cfg.Provider {
-	case config.ProviderOpenAI:
-		if cfg.OpenAI.AuthMode == config.OpenAIAuthModeChatGPT {
-			var credentials ChatGPTCredentialSource
-			if len(chatGPT) > 0 {
-				credentials = chatGPT[0]
-			}
-			return NewChatGPT(cfg.OpenAI, credentials, client), nil
-		}
-		return NewOpenAI(cfg.OpenAI, client), nil
-	case config.ProviderOpenAICompatible:
-		return NewOpenAICompatible(cfg.Compatible, client), nil
-	case config.ProviderAnthropic:
-		return NewAnthropic(cfg.Anthropic, client), nil
-	default:
+	definition, ok := config.LookupProvider(cfg.Provider)
+	if !ok {
 		return nil, fmt.Errorf("%w: unsupported AI_PROVIDER %q", ErrNotConfigured, cfg.Provider)
+	}
+	var credentials ChatGPTCredentialSource
+	if len(chatGPT) > 0 {
+		credentials = chatGPT[0]
+	}
+	return newConfiguredProvider(definition, *definition.Settings(cfg), client, credentials)
+}
+
+func newConfiguredProvider(definition *config.ProviderDefinition, settings config.ProviderConfig, client *http.Client, credentials ChatGPTCredentialSource) (Provider, error) {
+	if definition.AccountAuth && settings.AuthMode == config.OpenAIAuthModeChatGPT {
+		return NewChatGPT(settings, credentials, client), nil
+	}
+	switch definition.WireFormat(&settings) {
+	case config.FormatResponses:
+		return newOpenAI(settings, definition.ID, definition.EnvPrefix+"_API_KEY", definition.EnvPrefix+"_MODEL", client), nil
+	case config.FormatChatCompletions:
+		return newChatCompletions(settings, definition, client), nil
+	case config.FormatMessages:
+		return NewAnthropic(settings, client), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported %s_API_FORMAT %q", ErrNotConfigured, definition.EnvPrefix, settings.APIFormat)
 	}
 }
 

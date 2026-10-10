@@ -1,8 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,24 +132,24 @@ func TestLegacyRuntimeSettingsMoveCustomEndpointToCompatible(t *testing.T) {
 	}
 }
 
-func TestRuntimeSettingsOverrideNonSecretInferenceConfig(t *testing.T) {
+// writeSettingsFile stores a settings document exactly as it would appear on
+// disk.
+func writeSettingsFile(t *testing.T, document string) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "brainslug.settings.json")
-	settings := RuntimeSettings{
-		Provider: "anthropic",
-		OpenAI: OpenAIRuntimeSettings{
-			ProviderRuntimeSettings: ProviderRuntimeSettings{
-				Model: "gpt-5.6-luna", MaxOutputTokens: 4096, TimeoutSeconds: 4,
-			},
-			ReasoningEffort: "none",
-			TextVerbosity:   "low",
-		},
-		Anthropic: ProviderRuntimeSettings{
-			Model: "claude-runtime", BaseURL: "https://anthropic.example/v1", MaxOutputTokens: 2048, TimeoutSeconds: 5,
-		},
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if err := SaveRuntimeSettings(path, settings); err != nil {
-		t.Fatalf("SaveRuntimeSettings() error = %v", err)
-	}
+	return path
+}
+
+func TestRuntimeSettingsOverrideNonSecretInferenceConfig(t *testing.T) {
+	path := writeSettingsFile(t, `{
+  "version": 2,
+  "provider": "anthropic",
+  "openai": {"model": "gpt-5.6-luna", "max_output_tokens": 4096, "timeout_seconds": 4, "reasoning_effort": "none", "text_verbosity": "low"},
+  "anthropic": {"model": "claude-runtime", "base_url": "https://anthropic.example/v1", "max_output_tokens": 2048, "timeout_seconds": 5}
+}`)
 
 	t.Setenv("RUNTIME_SETTINGS_PATH", path)
 	t.Setenv("AI_PROVIDER", "openai")
@@ -170,17 +173,14 @@ func TestRuntimeSettingsOverrideNonSecretInferenceConfig(t *testing.T) {
 	}
 }
 
+// A present empty value is a deliberate dashboard choice to restore the
+// provider default, unlike an absent one.
 func TestRuntimeSettingsCanRestoreProviderResponseControlDefaults(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "brainslug.settings.json")
-	settings := RuntimeSettings{
-		Provider: ProviderOpenAI,
-		OpenAI: OpenAIRuntimeSettings{ProviderRuntimeSettings: ProviderRuntimeSettings{
-			Model: "compatible-model", MaxOutputTokens: 256, TimeoutSeconds: 6,
-		}},
-	}
-	if err := SaveRuntimeSettings(path, settings); err != nil {
-		t.Fatalf("SaveRuntimeSettings() error = %v", err)
-	}
+	path := writeSettingsFile(t, `{
+  "version": 2,
+  "provider": "openai",
+  "openai": {"model": "compatible-model", "max_output_tokens": 256, "timeout_seconds": 6, "reasoning_effort": "", "text_verbosity": ""}
+}`)
 
 	t.Setenv("RUNTIME_SETTINGS_PATH", path)
 	t.Setenv("AI_PROVIDER", ProviderOpenAI)
@@ -200,19 +200,13 @@ func TestRuntimeSettingsCanRestoreProviderResponseControlDefaults(t *testing.T) 
 }
 
 func TestRuntimeSettingsSelectChatGPTAndDerivePrivateCredentialPath(t *testing.T) {
-	directory := t.TempDir()
-	settingsPath := filepath.Join(directory, "brainslug.settings.json")
+	settingsPath := writeSettingsFile(t, `{
+  "version": 2,
+  "provider": "openai",
+  "openai": {"model": "gpt-5.6-terra", "max_output_tokens": 1024, "timeout_seconds": 6, "auth_mode": "chatgpt"}
+}`)
+	directory := filepath.Dir(settingsPath)
 	databasePath := filepath.Join(directory, "brainslug.db")
-	settings := RuntimeSettings{
-		Provider: ProviderOpenAI,
-		OpenAI: OpenAIRuntimeSettings{
-			ProviderRuntimeSettings: ProviderRuntimeSettings{Model: "gpt-5.6-terra", MaxOutputTokens: 1024, TimeoutSeconds: 6},
-			AuthMode:                OpenAIAuthModeChatGPT,
-		},
-	}
-	if err := SaveRuntimeSettings(settingsPath, settings); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv("RUNTIME_SETTINGS_PATH", settingsPath)
 	t.Setenv("SQLITE_PATH", databasePath)
 	t.Setenv("OPENAI_MODEL", "gpt-environment")
@@ -236,6 +230,237 @@ func TestRuntimeSettingsSelectChatGPTAndDerivePrivateCredentialPath(t *testing.T
 	wantAdminAuthPath := filepath.Join(directory, "brainslug.admin-auth.json")
 	if cfg.AdminAuthFile != wantAdminAuthPath {
 		t.Fatalf("AdminAuthFile = %q, want %q", cfg.AdminAuthFile, wantAdminAuthPath)
+	}
+}
+
+// A settings file written for one change must not erase environment values it
+// never mentioned. Absent fields used to be read as empty, which silently
+// replaced an operator's proxy base URL and reasoning effort.
+func TestRuntimeSettingsKeepEnvironmentForAbsentFields(t *testing.T) {
+	path := writeSettingsFile(t, `{
+  "version": 2,
+  "provider": "anthropic",
+  "openai": {"model": "gpt-dashboard"},
+  "anthropic": {"model": "claude-dashboard"}
+}`)
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+	t.Setenv("AI_PROVIDER", ProviderAnthropic)
+	t.Setenv("ANTHROPIC_MODEL", "claude-environment")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://proxy.example/v1")
+	t.Setenv("OPENAI_REASONING_EFFORT", "high")
+	t.Setenv("OPENAI_TEXT_VERBOSITY", "low")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Anthropic.BaseURL != "https://proxy.example/v1" {
+		t.Errorf("Anthropic base URL = %q, want the environment value", cfg.Anthropic.BaseURL)
+	}
+	if cfg.OpenAI.ReasoningEffort != "high" || cfg.OpenAI.TextVerbosity != "low" {
+		t.Errorf("OpenAI controls = %q/%q, want the environment values", cfg.OpenAI.ReasoningEffort, cfg.OpenAI.TextVerbosity)
+	}
+	if cfg.Anthropic.Model != "claude-dashboard" || cfg.OpenAI.Model != "gpt-dashboard" {
+		t.Errorf("models = %q/%q, want the dashboard values", cfg.Anthropic.Model, cfg.OpenAI.Model)
+	}
+}
+
+// The dashboard stores only what differs from the environment, so later
+// edits to .env still take effect for everything else, and choosing the
+// environment's value again removes the override.
+func TestRuntimeSettingsRecordOnlyChangesFromEnvironment(t *testing.T) {
+	t.Setenv("RUNTIME_SETTINGS_PATH", filepath.Join(t.TempDir(), "brainslug.settings.json"))
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+	t.Setenv("AI_PROVIDER", ProviderOpenAI)
+	t.Setenv("OPENAI_MODEL", "gpt-environment")
+	t.Setenv("ANTHROPIC_MODEL", "claude-environment")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://proxy.example/v1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settings := RuntimeSettingsFromConfig(&cfg); !reflect.DeepEqual(settings, RuntimeSettings{Version: runtimeSettingsVersion}) {
+		t.Fatalf("unchanged configuration produced settings %+v", settings)
+	}
+
+	cfg.Provider = ProviderAnthropic
+	cfg.Anthropic.Model = "claude-dashboard"
+	if err := SaveRuntimeSettings(cfg.RuntimeSettingsPath, RuntimeSettingsFromConfig(&cfg)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(cfg.RuntimeSettingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"version":   float64(runtimeSettingsVersion),
+		"provider":  ProviderAnthropic,
+		"providers": map[string]any{ProviderAnthropic: map[string]any{"model": "claude-dashboard"}},
+	}
+	if !reflect.DeepEqual(saved, want) {
+		t.Fatalf("saved settings = %s, want only the changed values", data)
+	}
+
+	cfg.Anthropic.Model = "claude-environment"
+	if settings := RuntimeSettingsFromConfig(&cfg); settings.Providers[ProviderAnthropic] != nil {
+		t.Errorf("restoring the environment model kept an override: %+v", *settings.Providers[ProviderAnthropic])
+	}
+}
+
+func TestCompatibleFormatSurvivesSettingsReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+	t.Setenv("AI_PROVIDER", ProviderOpenAICompatible)
+	t.Setenv("OPENAI_COMPATIBLE_MODEL", "local-model")
+	t.Setenv("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:11434/v1")
+	t.Setenv("OPENAI_COMPATIBLE_API_FORMAT", FormatResponses)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Compatible.APIFormat = FormatChatCompletions
+	if err := SaveRuntimeSettings(path, RuntimeSettingsFromConfig(&cfg)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved RuntimeSettings
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	settings := saved.Providers[ProviderOpenAICompatible]
+	if saved.Version != 3 || settings == nil || settings.APIFormat == nil || *settings.APIFormat != FormatChatCompletions || settings.Model != nil {
+		t.Fatalf("saved settings = %s", data)
+	}
+	reloaded, err := Load()
+	if err != nil || reloaded.Compatible.APIFormat != FormatChatCompletions || reloaded.Compatible.BaseURL != cfg.Compatible.BaseURL {
+		t.Fatalf("reloaded settings = %+v, error = %v", reloaded.Compatible, err)
+	}
+	overrides := reloaded.Overrides()
+	if len(overrides) != 1 || overrides[0].Variable != "OPENAI_COMPATIBLE_API_FORMAT" {
+		t.Fatalf("format override is not visible: %+v", overrides)
+	}
+}
+
+func TestCompatibleFormatDefaultsAndValidation(t *testing.T) {
+	for _, format := range []string{"", FormatResponses, FormatChatCompletions, "guess"} {
+		t.Run(format, func(t *testing.T) {
+			t.Setenv("RUNTIME_SETTINGS_PATH", filepath.Join(t.TempDir(), "settings.json"))
+			t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+			t.Setenv("AI_PROVIDER", ProviderOpenAICompatible)
+			t.Setenv("OPENAI_COMPATIBLE_MODEL", "model")
+			t.Setenv("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:11434/v1")
+			t.Setenv("OPENAI_COMPATIBLE_API_FORMAT", format)
+			cfg, err := Load()
+			if format == "guess" {
+				if err == nil || !strings.Contains(err.Error(), "OPENAI_COMPATIBLE_API_FORMAT") {
+					t.Fatalf("invalid format error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := format
+			if want == "" {
+				want = FormatResponses
+			}
+			if cfg.Compatible.APIFormat != want {
+				t.Fatalf("format = %q, want %q", cfg.Compatible.APIFormat, want)
+			}
+		})
+	}
+}
+
+func TestKeyedSettingsRejectUnknownRoutesAndSecrets(t *testing.T) {
+	for _, block := range []string{`"unknown":{"model":"model"}`, `"openai":{"api_key":"private-value"}`} {
+		t.Run(block, func(t *testing.T) {
+			t.Setenv("RUNTIME_SETTINGS_PATH", writeSettingsFile(t, `{"version":3,"providers":{`+block+`}}`))
+			t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+			t.Setenv("AI_PROVIDER", ProviderOpenAI)
+			t.Setenv("OPENAI_MODEL", "model")
+			if _, err := Load(); err == nil {
+				t.Fatal("unknown routes and secrets must not enter runtime settings")
+			}
+		})
+	}
+}
+
+func TestOverridesReportReplacedEnvironmentVariables(t *testing.T) {
+	path := writeSettingsFile(t, `{
+  "version": 2,
+  "openai": {"model": "gpt-dashboard", "timeout_seconds": 6}
+}`)
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+	t.Setenv("AI_PROVIDER", ProviderOpenAI)
+	t.Setenv("OPENAI_MODEL", "gpt-environment")
+	t.Setenv("OPENAI_TIMEOUT_SECONDS", "6")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []Override{{Variable: "OPENAI_MODEL", Environment: "gpt-environment", InEffect: "gpt-dashboard"}}
+	if got := cfg.Overrides(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Overrides() = %+v, want %+v", got, want)
+	}
+
+	cfg.OpenAI.Model = "gpt-environment"
+	if got := cfg.Overrides(); len(got) != 0 {
+		t.Errorf("Overrides() after restoring the environment value = %+v", got)
+	}
+}
+
+func TestLoadRejectsProviderTimeoutBeyondVoiceLimit(t *testing.T) {
+	t.Setenv("RUNTIME_SETTINGS_PATH", filepath.Join(t.TempDir(), "missing-settings.json"))
+	t.Setenv("AI_PROVIDER", ProviderOpenAI)
+	t.Setenv("OPENAI_MODEL", "gpt-test")
+	t.Setenv("OPENAI_TIMEOUT_SECONDS", "7")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_TIMEOUT_SECONDS") {
+		t.Fatalf("Load() error = %v, want a timeout error naming OPENAI_TIMEOUT_SECONDS", err)
+	}
+}
+
+// Earlier dashboards accepted timeouts up to 60 seconds. A saved value above
+// the voice limit is reduced with a warning instead of failing startup.
+func TestRuntimeSettingsReduceTimeoutBeyondVoiceLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brainslug.settings.json")
+	saved := `{
+  "version": 2,
+  "provider": "openai",
+  "openai": {"model": "gpt-test", "max_output_tokens": 1024, "timeout_seconds": 30, "reasoning_effort": "", "text_verbosity": ""},
+  "anthropic": {"model": "", "max_output_tokens": 4096, "timeout_seconds": 6}
+}`
+	if err := os.WriteFile(path, []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUNTIME_SETTINGS_PATH", path)
+	t.Setenv("AI_PROVIDER", ProviderOpenAI)
+	t.Setenv("OPENAI_MODEL", "gpt-test")
+	t.Setenv("ALEXA_VERIFY_REQUESTS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if want := MaxProviderTimeoutSeconds * time.Second; cfg.OpenAI.Timeout != want {
+		t.Errorf("OpenAI timeout = %v, want %v", cfg.OpenAI.Timeout, want)
+	}
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "timeout_seconds 30") {
+		t.Errorf("Warnings = %q, want one timeout warning", cfg.Warnings)
 	}
 }
 
