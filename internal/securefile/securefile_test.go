@@ -8,6 +8,42 @@ import (
 	"testing"
 )
 
+func TestPrepareDirectoryPreservesOwnerTraversal(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		name := "new"
+		if existing {
+			name = "existing"
+		}
+		t.Run(name, func(t *testing.T) {
+			directory := filepath.Join(t.TempDir(), "private")
+			if existing {
+				if err := os.Mkdir(directory, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := PrepareDirectory(directory); err != nil {
+				t.Fatalf("PrepareDirectory() error = %v", err)
+			}
+			if runtime.GOOS != "windows" {
+				info, err := os.Stat(directory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if permission := info.Mode().Perm(); permission != 0o700 {
+					t.Fatalf("directory permissions = %o, want 700", permission)
+				}
+			}
+			path := filepath.Join(directory, "identity.key")
+			if err := CreateExclusive(path, []byte("private content")); err != nil {
+				t.Fatalf("CreateExclusive() in private directory error = %v", err)
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != "private content" {
+				t.Fatalf("private directory content = %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestWriteReplacesContentWithoutLeftovers(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "brainslug.settings.json")
