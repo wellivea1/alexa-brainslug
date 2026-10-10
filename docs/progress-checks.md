@@ -4,6 +4,18 @@ Use these checks before merging or declaring a phase complete. Automated checks 
 
 ## Automated Baseline
 
+The October 8 Claude continuation and optional Codex implementation passed
+`go build ./...`, `go vet ./...`, the full race-enabled test suite, module tidy,
+formatter/lint checks (zero issues), and `git diff --check`. Default per-package
+statement coverage is 62.3%; cross-package integration and browser checks add
+verification beyond that instrumentation. The standalone CLI reports protocol 1,
+the two new Windows startup scripts pass parser checks, and disposable dashboard
+submission/cancellation plus desktop/mobile layout were checked in the browser.
+
+No live Codex inference, physical multi-machine LAN, updated ASK publication,
+physical Echo, or desktop placement proof was performed. These release gates are
+listed in `codex-operations.md` and `codex-integration-plan.md`.
+
 Run locally where Go 1.26 and dependencies are available:
 
 ```bash
@@ -45,20 +57,19 @@ Coverage is diagnostic, not a quota. A changed behavior needs a test that would 
 
 ### Not implemented
 
-- [ ] Durable background jobs.
-- [ ] Request idempotency.
-- [ ] Pending, failed, canceled, and interrupted job states.
+- [x] Optional Codex durable jobs, idempotency, and confirmed job states.
 - [ ] Rate limits.
 - [ ] Provider concurrency limit.
 - [ ] Global spend cap.
-- [ ] Retention and deletion.
+- [x] Codex operational retention; ordinary answer-history deletion remains open.
 - [ ] MCP runtime adapter.
 
 ### External validation status
 
 - [ ] CI runner completes all configured jobs.
 - [x] Race-enabled tests pass locally with CGO and a Windows C compiler.
-- [x] Interaction model builds in Alexa Developer Console.
+- [x] Previous direct-answer interaction model built in Alexa Developer Console.
+- [ ] Updated Codex intent model builds and is published in Alexa Developer Console.
 - [x] Real Amazon-signed request passes the verifier.
 - [x] Developer Console question and last-response requests complete through provider and SQLite history.
 - [ ] Physical Echo completes the two-turn flow.
@@ -69,7 +80,9 @@ Architecture:
 
 - [x] `internal/app` contains no ASK protocol types.
 - [x] `internal/alexa` does not import provider implementations.
-- [x] `internal/alexa` does not select the provider system prompt.
+- [x] `internal/alexa` supplies voice instructions and shapes full answers for speech.
+- [x] The application and providers preserve full text without a voice default.
+- [x] Legacy short-only history remains readable.
 - [x] `internal/alexa` does not construct SQLite records.
 - [x] Provider and repository dependencies are application-owned ports.
 - [x] Main process wiring selects concrete adapters.
@@ -190,6 +203,9 @@ Common:
 - [x] Derived provider end-user identifier is hashed where supported.
 - [x] Provider timeout defaults below Alexa's external budget.
 - [x] Output-token cap is separate from spoken word shaping.
+- [x] Provider metadata, configuration, credentials, and dashboard panels share a static table.
+- [x] Compatible Responses and Chat Completions formats are selected explicitly and tested without fallback.
+- [x] Provider-keyed settings preserve version 1 and 2 files and environment precedence.
 
 OpenAI:
 
@@ -213,6 +229,9 @@ Anthropic:
 ## Current Synchronous ASK Review
 
 - [x] Provider timeout default is six seconds.
+- [x] Provider timeout is capped below Alexa's eight-second limit.
+- [x] One response budget covers verification, provider call, and persistence.
+- [x] Timeouts and caller hang-ups are still recorded in history.
 - [x] Successful answer is spoken and optionally saved.
 - [x] Timeout maps to a user-safe provider-busy response.
 - [x] Empty visible output is diagnosable.
@@ -227,19 +246,20 @@ Known limitations:
 
 ## Deferred-Job Gate
 
+The optional Codex controller/worker now satisfies these local checks through
+fake runtime/protocol and actual loopback mTLS tests. Physical Echo, real accounts,
+multi-machine LAN deployment and desktop placement remain external gates; see
+`codex-operations.md`. Manual direct answers still use the synchronous path.
+
 Do not call deferred work complete until all are true:
 
-- [ ] Job schema is append-only and transactional.
-- [ ] Adapter request ID is stored.
-- [ ] Idempotency scope includes adapter, principal, and request ID.
-- [ ] Accepted state is persisted before provider spending.
-- [ ] Immediate voice deadline is separate from job deadline.
-- [ ] Worker queue and concurrency are bounded.
-- [ ] Completed, failed, canceled, and interrupted states exist.
-- [ ] Restart recovery is deterministic.
-- [ ] Duplicate requests reuse the existing job.
-- [ ] Status and result reads enforce principal ownership.
-- [ ] Alexa pending, completed, and failed wording is tested.
+- [x] Independent transactional schema with version rejection.
+- [x] Adapter ID and principal/source/request idempotency are stored.
+- [x] Acceptance precedes inference; voice and execution deadlines are separate.
+- [x] Queue, concurrency, execution and event spools are bounded.
+- [x] Final states require facts; restart never blindly replays an uncertain turn.
+- [x] Duplicates reuse the saved job and reads enforce current principal grants.
+- [x] Pending, completed, failed, canceled and uncertain voice wording is tested.
 
 ## Identity And Data Review
 

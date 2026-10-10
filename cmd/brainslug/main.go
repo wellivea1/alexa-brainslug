@@ -25,6 +25,7 @@ import (
 	"github.com/wellivea1/alexa-brainslug/internal/providers"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
+	"github.com/wellivea1/alexa-brainslug/internal/taskgateway"
 	"github.com/wellivea1/alexa-brainslug/internal/web"
 )
 
@@ -76,6 +77,13 @@ func run() error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: parseLogLevel(cfg.LogLevel),
 	})))
+	for _, warning := range cfg.Warnings {
+		slog.Warn("configuration adjusted", "detail", warning)
+	}
+	for _, override := range cfg.Overrides() {
+		// Values are shown on the authenticated dashboard rather than logged.
+		slog.Warn("dashboard settings override an environment variable", "variable", override.Variable, "settings_file", cfg.RuntimeSettingsPath)
+	}
 
 	// Signals cancel this context, which unblocks the wait below.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -129,7 +137,13 @@ func run() error {
 	if err := providerManager.AttachAPIKeyStore(providerAuth); err != nil {
 		return fmt.Errorf("apply provider credentials: %w", err)
 	}
+	tasks, err := taskgateway.New(cfg.Codex, providerManager.SetCodex)
+	if err != nil {
+		return fmt.Errorf("configure task controller: %w", err)
+	}
+	defer tasks.Close()
 	alexaHandler := alexa.NewHandler(alexa.Options{
+		Tasks: app.NewTaskService(tasks),
 		Verification: alexa.VerificationConfig{
 			VerifyRequests: cfg.AlexaVerifyRequests,
 			AllowedSkillID: cfg.AlexaAllowedSkillID,
@@ -137,28 +151,8 @@ func run() error {
 	}, application)
 
 	servers := []namedServer{
-		{
-			name: "ask",
-			server: &http.Server{
-				Addr:              cfg.ServerAddr,
-				Handler:           buildPublicHandler(cfg.PublicBaseURL, alexaHandler),
-				ReadHeaderTimeout: readHeaderTimeout,
-				ReadTimeout:       readTimeout,
-				WriteTimeout:      cfg.SelectedTimeout() + writeTimeoutSlack,
-				IdleTimeout:       idleTimeout,
-			},
-		},
-		{
-			name: "admin",
-			server: &http.Server{
-				Addr:              adminAddr,
-				Handler:           buildAdminHandler(&cfg, providerManager, db, startedAt, openAIAuth, managementAuth),
-				ReadHeaderTimeout: readHeaderTimeout,
-				ReadTimeout:       readTimeout,
-				WriteTimeout:      adminWriteTimeout,
-				IdleTimeout:       idleTimeout,
-			},
-		},
+		{name: "ask", server: newPublicServer(cfg.ServerAddr, buildPublicHandler(cfg.PublicBaseURL, alexaHandler))},
+		{name: "admin", server: newAdminServer(adminAddr, buildAdminHandler(&cfg, providerManager, db, startedAt, openAIAuth, managementAuth, tasks))},
 	}
 
 	errs := make(chan error, len(servers))
@@ -196,6 +190,31 @@ func run() error {
 	return nil
 }
 
+// newPublicServer builds the ASK listener. Its write deadline follows the
+// adapter's fixed response budget rather than any provider setting, so a
+// dashboard change to the provider timeout cannot outgrow it.
+func newPublicServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      alexa.ResponseBudget + writeTimeoutSlack,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
+func newAdminServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      adminWriteTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
 func serve(server namedServer, errs chan<- error) {
 	slog.Info("starting Alexa Brainslug listener", "listener", server.name, "addr", server.server.Addr)
 	if err := server.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -215,8 +234,13 @@ func buildPublicHandler(publicBaseURL string, alexaHandler http.Handler) http.Ha
 
 // buildAdminHandler registers local administrative routes on the separate
 // listener. The caller controls binding; the default is host loopback.
-func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time, openAIAuth web.OpenAIAuthController, managementAuth *adminauth.Manager) http.Handler {
+func buildAdminHandler(cfg *config.Config, controller web.InferenceController, db *store.Store, startedAt time.Time, openAIAuth web.OpenAIAuthController, managementAuth *adminauth.Manager, taskManagers ...*taskgateway.Manager) http.Handler {
+	var tasks *taskgateway.Manager
+	if len(taskManagers) > 0 {
+		tasks = taskManagers[0]
+	}
 	dashboard := web.NewDashboard(db, web.Options{
+		Tasks:                   tasks,
 		Inference:               controller,
 		OpenAIAuth:              openAIAuth,
 		StartedAt:               startedAt,
@@ -239,6 +263,7 @@ func buildAdminHandler(cfg *config.Config, controller web.InferenceController, d
 	mux.HandleFunc("POST /alexa", http.NotFound)
 
 	privateMux := http.NewServeMux()
+	dashboard.RegisterTaskRoutes(privateMux)
 	privateMux.HandleFunc("GET /health", healthHandler(cfg, controller))
 	privateMux.HandleFunc("GET /history", dashboard.HandleHistory)
 	privateMux.HandleFunc("POST /settings/provider", dashboard.HandleProviderUpdate)
@@ -270,13 +295,7 @@ func livenessHandler(w http.ResponseWriter, _ *http.Request) {
 func healthHandler(cfg *config.Config, controller interface{ Snapshot() inference.Snapshot }) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		snapshot := controller.Snapshot()
-		active := snapshot.OpenAI
-		switch snapshot.ActiveProvider {
-		case config.ProviderOpenAICompatible:
-			active = snapshot.Compatible
-		case config.ProviderAnthropic:
-			active = snapshot.Anthropic
-		}
+		active := snapshot.Provider(snapshot.ActiveProvider)
 		writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 			"status":                     "ok",
 			"service":                    "alexa-brainslug",

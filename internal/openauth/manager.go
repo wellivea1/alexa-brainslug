@@ -12,16 +12,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wellivea1/alexa-brainslug/internal/securefile"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
 )
 
@@ -46,7 +47,17 @@ type Snapshot struct {
 	AccountIDSet bool
 	ExpiresAt    time.Time
 	StoragePath  string
+
+	// Problem explains why saved credentials could not be used or kept, for
+	// the operator to act on. It never contains token material.
+	Problem string
 }
+
+// Operator-facing problems. They name the remedy, not the cause's details.
+const (
+	problemUnreadable = "The saved ChatGPT credentials could not be read. Connect the account again."
+	problemNotSaved   = "The ChatGPT credentials could not be saved, so the connection will be lost when Brainslug restarts. Check the data directory, then connect again."
+)
 
 // DeviceFlow is the non-secret state displayed during code login.
 type DeviceFlow struct {
@@ -102,6 +113,7 @@ type Manager struct {
 	path           string
 	http           *http.Client
 	credentials    credentials
+	problem        string
 	browser        map[string]browserPending
 	device         map[string]devicePending
 	callbackServer *http.Server
@@ -109,6 +121,11 @@ type Manager struct {
 }
 
 // New loads an existing credential file when present.
+//
+// The account connection is optional, so a damaged or unreadable credential
+// file leaves the manager disconnected with an operator-visible problem
+// instead of failing: refusing to start would take Alexa ingress and every
+// other provider down with it.
 func New(path string, client *http.Client) (*Manager, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
@@ -120,7 +137,8 @@ func New(path string, client *http.Client) (*Manager, error) {
 		device:  make(map[string]devicePending),
 	}
 	if err := m.load(); err != nil {
-		return nil, err
+		slog.Warn("ChatGPT account credentials are unusable; the connection is disabled until it is reconnected", "error", err)
+		m.problem = problemUnreadable
 	}
 	return m, nil
 }
@@ -142,6 +160,7 @@ func (m *Manager) Snapshot() Snapshot {
 		AccountIDSet: strings.TrimSpace(m.credentials.AccountID) != "",
 		ExpiresAt:    m.credentials.ExpiresAt,
 		StoragePath:  m.path,
+		Problem:      m.problem,
 	}
 }
 
@@ -165,7 +184,12 @@ func (m *Manager) Token(ctx context.Context) (accessToken, accountID string, err
 		return "", "", err
 	}
 	if err := m.storeTokensLocked(tokens); err != nil {
-		return "", "", err
+		if !errors.Is(err, errNotSaved) {
+			return "", "", err
+		}
+		// The refreshed tokens are already in use in memory. Only the copy
+		// on disk is stale, which matters at the next restart.
+		slog.Warn("refreshed ChatGPT credentials could not be saved", "error", err)
 	}
 	return m.credentials.AccessToken, m.credentials.AccountID, nil
 }
@@ -322,6 +346,7 @@ func (m *Manager) Clear() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.credentials = credentials{}
+	m.problem = ""
 	if m.path == "" {
 		return nil
 	}
@@ -419,8 +444,12 @@ func (m *Manager) stopCallbackServerIfIdle(parent context.Context) {
 func (m *Manager) saveTokensAndActivate(tokens tokenResponse) error {
 	m.mu.Lock()
 	if err := m.storeTokensLocked(tokens); err != nil {
-		m.mu.Unlock()
-		return err
+		if !errors.Is(err, errNotSaved) {
+			m.mu.Unlock()
+			return err
+		}
+		// The connection works until restart; Snapshot carries the problem.
+		slog.Warn("new ChatGPT credentials could not be saved", "error", err)
 	}
 	callback := m.onConnected
 	m.mu.Unlock()
@@ -451,22 +480,31 @@ func (m *Manager) storeTokensLocked(tokens tokenResponse) error {
 		expiresIn = defaultTokenLifetime
 	}
 	next := credentials{Version: credentialVersion, AccessToken: accessToken, RefreshToken: refreshToken, AccountID: accountID, ExpiresAt: time.Now().UTC().Add(expiresIn)}
-	if m.path != "" {
-		// This is the dedicated private credential file, not a response or log.
-		data, err := json.MarshalIndent(next, "", "  ") //nolint:gosec // G117: persisting these fields is the file's purpose.
-		if err != nil {
-			return fmt.Errorf("encode ChatGPT credentials: %w", err)
-		}
-		if err := os.MkdirAll(filepath.Dir(m.path), 0o750); err != nil {
-			return fmt.Errorf("create ChatGPT credential directory: %w", err)
-		}
-		if err := os.WriteFile(m.path, append(data, '\n'), 0o600); err != nil {
-			return fmt.Errorf("write ChatGPT credential file: %w", err)
-		}
-	}
+
+	// Memory is updated before the file. OpenAI may rotate the refresh token,
+	// invalidating the old one, so discarding the new pair because a write
+	// failed would disconnect the account even though the refresh succeeded.
 	m.credentials = next
+	m.problem = ""
+	if m.path == "" {
+		return nil
+	}
+	// This is the dedicated private credential file, not a response or log.
+	data, err := json.MarshalIndent(next, "", "  ") //nolint:gosec // G117: persisting these fields is the file's purpose.
+	if err != nil {
+		m.problem = problemNotSaved
+		return fmt.Errorf("%w: encode: %w", errNotSaved, err)
+	}
+	if err := securefile.Write(m.path, append(data, '\n')); err != nil {
+		m.problem = problemNotSaved
+		return fmt.Errorf("%w: %w", errNotSaved, err)
+	}
 	return nil
 }
+
+// errNotSaved means credentials are active in memory but were not written to
+// disk, so they will not survive a restart.
+var errNotSaved = errors.New("ChatGPT credentials were not saved")
 
 func (m *Manager) load() error {
 	if m.path == "" {
@@ -480,9 +518,7 @@ func (m *Manager) load() error {
 		return fmt.Errorf("read ChatGPT credential file: %w", err)
 	}
 	var stored credentials
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&stored); err != nil {
+	if err := securefile.DecodeJSON(data, &stored); err != nil {
 		return fmt.Errorf("decode ChatGPT credential file: %w", err)
 	}
 	if stored.Version != credentialVersion {

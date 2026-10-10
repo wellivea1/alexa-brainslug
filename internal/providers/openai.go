@@ -7,14 +7,12 @@ import (
 	"strings"
 
 	"github.com/wellivea1/alexa-brainslug/internal/config"
-	"github.com/wellivea1/alexa-brainslug/internal/speech"
 )
 
 const (
-	defaultOpenAIBaseURL = "https://api.openai.com/v1"
 	openAIResponsesPath  = "/responses"
-	openAIName           = "openai"
-	openAICompatibleName = "openai-compatible"
+	openAIName           = config.ProviderOpenAI
+	openAICompatibleName = config.ProviderOpenAICompatible
 
 	openAIStatusCompleted  = "completed"
 	openAIStatusIncomplete = "incomplete"
@@ -42,16 +40,17 @@ func NewOpenAI(cfg config.OpenAIConfig, client *http.Client) *OpenAI {
 	return newOpenAI(cfg, openAIName, "OPENAI_API_KEY", "OPENAI_MODEL", client)
 }
 
-// NewOpenAICompatible builds a distinct compatible provider route. It shares
-// the Responses wire format but retains an independent endpoint, model,
-// credential, and provider identity.
-func NewOpenAICompatible(cfg config.OpenAIConfig, client *http.Client) *OpenAI {
-	return newOpenAI(cfg, openAICompatibleName, "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_MODEL", client)
+// NewOpenAICompatible builds the explicitly selected compatible wire format
+// while retaining its independent endpoint, model, credential, and identity.
+func NewOpenAICompatible(cfg config.OpenAIConfig, client *http.Client) (Provider, error) {
+	definition, _ := config.LookupProvider(config.ProviderOpenAICompatible)
+	return newConfiguredProvider(definition, cfg, client, nil)
 }
 
 func newOpenAI(cfg config.OpenAIConfig, name, keyName, modelName string, client *http.Client) *OpenAI {
+	definition, _ := config.LookupProvider(name)
 	return &OpenAI{
-		ep:              newEndpoint(cfg.APIKey, cfg.BaseURL, defaultOpenAIBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
+		ep:              newEndpoint(cfg.APIKey, cfg.BaseURL, definition.DefaultBaseURL, cfg.Model, cfg.MaxOutputTokens, cfg.Timeout, client),
 		name:            name,
 		keyName:         keyName,
 		modelName:       modelName,
@@ -104,7 +103,6 @@ func (p *OpenAI) Ask(ctx context.Context, req Request) (Response, error) {
 	}
 
 	return Response{
-		ShortAnswer:  speech.Summarize(full, spokenWordLimit),
 		FullAnswer:   full,
 		Model:        firstNonEmpty(decoded.Model, resolved.model),
 		ProviderName: p.name,

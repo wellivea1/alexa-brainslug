@@ -143,6 +143,84 @@ func TestDeviceFlowStoresRefreshableCredentialAndActivates(t *testing.T) {
 	}
 }
 
+// The account connection is optional: an unreadable credential file must not
+// stop the service, which would take Alexa ingress down with it.
+func TestDamagedCredentialFileDisconnectsInsteadOfFailing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brainslug.openai-auth.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"access_token":"trunc`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := New(path, &http.Client{})
+	if err != nil {
+		t.Fatalf("New() error = %v, want a disconnected manager", err)
+	}
+	snapshot := manager.Snapshot()
+	if snapshot.Connected || snapshot.Problem != problemUnreadable {
+		t.Fatalf("snapshot = %+v, want disconnected with a problem", snapshot)
+	}
+	if strings.Contains(snapshot.Problem, "trunc") {
+		t.Fatal("problem text leaked credential file content")
+	}
+}
+
+// A refresh can rotate the refresh token. If saving the new pair fails, the
+// pair must stay in use rather than being thrown away for the stale one.
+func TestRefreshKeepsRotatedTokensWhenSaveFails(t *testing.T) {
+	jwt := testJWT(`{"chatgpt_account_id":"account-test"}`)
+	var tokenCalls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body string
+		switch request.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			body = `{"device_auth_id":"device-1","user_code":"ABCD-EFGH","interval":"1"}`
+		case "/api/accounts/deviceauth/token":
+			body = `{"authorization_code":"code-1","code_verifier":"verifier-1"}`
+		case "/oauth/token":
+			if tokenCalls.Add(1) == 1 {
+				body = `{"access_token":"access-old","id_token":"` + jwt + `","refresh_token":"refresh-old","expires_in":1}`
+			} else {
+				body = `{"access_token":"access-new","id_token":"` + jwt + `","refresh_token":"refresh-rotated","expires_in":3600}`
+			}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	path := filepath.Join(t.TempDir(), "brainslug.openai-auth.json")
+	manager, err := New(path, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow, err := manager.StartDevice(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := manager.PollDevice(t.Context(), flow.ID); err != nil || result != PollConnected {
+		t.Fatalf("PollDevice() = %q, %v", result, err)
+	}
+
+	// Make the next save fail: a file cannot replace a non-empty directory.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	access, _, err := manager.Token(t.Context())
+	if err != nil || access != "access-new" {
+		t.Fatalf("Token() = %q, %v; want the refreshed token despite the failed save", access, err)
+	}
+	if problem := manager.Snapshot().Problem; problem != problemNotSaved {
+		t.Errorf("Problem = %q, want the not-saved warning", problem)
+	}
+	if access, _, err := manager.Token(t.Context()); err != nil || access != "access-new" || tokenCalls.Load() != 2 {
+		t.Fatalf("second Token() = %q, %v after %d token calls; want the cached rotated token", access, err, tokenCalls.Load())
+	}
+}
+
 func testJWT(payload string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." +
 		base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".signature"

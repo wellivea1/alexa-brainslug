@@ -35,7 +35,7 @@ body {
 }
 
 a { color: inherit; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button, a, input, select, summary { outline-offset: 2px; }
 :focus-visible { outline: 2px solid var(--alexa); }
 h1, h2, h3, p { margin-top: 0; }
@@ -198,6 +198,11 @@ footer {
 .notice { margin-bottom: 14px; padding: 9px 12px; border: 1px solid var(--line); background: var(--surface); }
 .notice-ok { color: var(--ok); }
 .notice-error { color: var(--bad); }
+.notice-warn { border-color: var(--warn); }
+.notice-warn > strong { color: var(--warn); }
+.settings-overrides { margin: 14px 0 0; }
+.settings-overrides ul { margin: 6px 0; padding-left: 18px; }
+.settings-overrides small { color: var(--ink-3); }
 
 .auth-page { display: grid; place-items: center; padding: 28px; }
 .auth-shell { width: min(100%, 430px); padding: 0; }
@@ -348,7 +353,7 @@ footer {
   grid-template-columns: minmax(220px, 1fr) 140px 180px auto auto;
   gap: 7px;
 }
-input, select {
+input, select, textarea {
   width: 100%;
   min-height: 36px;
   padding: 7px 9px;
@@ -357,6 +362,18 @@ input, select {
   color: var(--ink);
   background: var(--canvas-soft);
 }
+
+.task-content { display: grid; gap: 20px; }
+.task-panel { padding: 20px; min-width: 0; }
+.task-panel > h2 { margin-top: 0; }
+.task-panel p { color: var(--ink-2); }
+.task-panel details { border-top: 1px solid var(--line); padding: 12px 0; }
+.task-panel form { display: grid; gap: 14px; margin: 14px 0; }
+.task-panel form .button { justify-self: start; }
+.task-hosts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.task-record { padding: 16px 0; border-top: 1px solid var(--line); }
+.task-text { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; font-size: 13px; }
+.task-panel textarea { min-width: 0; width: 100%; resize: vertical; }
 input::placeholder { color: #708792; }
 select { cursor: pointer; }
 .button {

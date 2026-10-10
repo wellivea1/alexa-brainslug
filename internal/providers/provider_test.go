@@ -13,7 +13,6 @@ func (mockProvider) Name() string {
 
 func (mockProvider) Ask(_ context.Context, req Request) (Response, error) {
 	return Response{
-		ShortAnswer:  "short",
 		FullAnswer:   "full",
 		Model:        req.Model,
 		ProviderName: "mock",
@@ -34,7 +33,7 @@ func TestProviderInterfaceWithMock(t *testing.T) {
 	if provider.Name() != "mock" {
 		t.Fatalf("Name() = %q", provider.Name())
 	}
-	if resp.ShortAnswer != "short" || resp.FullAnswer != "full" || resp.Model != "gpt-test" {
+	if resp.FullAnswer != "full" || resp.Model != "gpt-test" {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
 }

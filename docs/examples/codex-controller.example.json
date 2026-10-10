@@ -1,0 +1,48 @@
+{
+  "listen_addr": "127.0.0.1:9091",
+  "database": "data/controller/controller.db",
+  "tls": {
+    "certificate": "pki/controller.pem",
+    "key": "pki/controller.key",
+    "ca": "pki/ca.pem",
+    "server_name": ""
+  },
+  "registry": {
+    "revision": 0,
+    "policy": {
+      "policy_version": "pilot-1",
+      "queue_limit": 16,
+      "concurrency": 2,
+      "routing_seconds": 6,
+      "retention_days": 7,
+      "automatic_enabled": false,
+      "router_evaluation_approved": false,
+      "routing_accuracy_target": 0.95,
+      "default_project": "disposable",
+      "hosts": [{
+        "id": "dev-desktop",
+        "name": "desktop",
+        "codex_version": "0.162.0-alpha.2",
+        "models": [{"model": "SET_EXPLICIT_WORKER_MODEL", "effort": "medium"}]
+      }],
+      "projects": [{
+        "id": "disposable",
+        "name": "Disposable pilot",
+        "host_id": "dev-desktop",
+        "aliases": ["pilot"],
+        "description": "An owner-created disposable workspace for verifying the integration.",
+        "principals": ["owner:local"],
+        "default_profile": "pilot",
+        "lock_profile": true,
+        "profiles": {"pilot": {
+          "model": "SET_EXPLICIT_WORKER_MODEL",
+          "effort": "medium",
+          "permission": "read-only",
+          "max_seconds": 300,
+          "max_tokens": 32000
+        }}
+      }]
+    },
+    "identities": []
+  }
+}

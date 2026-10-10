@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wellivea1/alexa-brainslug/internal/config"
 	"github.com/wellivea1/alexa-brainslug/internal/inference"
 	"github.com/wellivea1/alexa-brainslug/internal/openauth"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
@@ -237,13 +238,13 @@ func TestHandleIndexWithNoInteractions(t *testing.T) {
 func TestHandleIndexRendersInferenceStateWithoutSecrets(t *testing.T) {
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
 		ActiveProvider: "openai",
-		OpenAI: inference.ProviderState{
+		Providers: []inference.ProviderState{{
 			ID: "openai", Name: "OpenAI", Active: true,
 			Model: "gpt-5.6-terra", EffectiveBaseURL: "https://api.openai.com/v1",
 			EndpointKind: "Official OpenAI Responses API", CredentialConfigured: true,
 			CredentialSource: "Environment", ReasoningEffort: "low", TextVerbosity: "low",
 			MaxOutputTokens: 25000, TimeoutSeconds: 6,
-		},
+		}},
 	}}
 	dashboard := NewDashboard(&fakeStore{}, Options{
 		Inference: controller, CSRFToken: "test-token",
@@ -268,12 +269,43 @@ func TestHandleIndexRendersInferenceStateWithoutSecrets(t *testing.T) {
 	}
 }
 
+// An operator who edits .env needs to see when a saved dashboard value is
+// the one actually in use, and when saved account credentials are unusable.
+func TestHandleIndexShowsOverridesAndConnectorProblems(t *testing.T) {
+	controller := &fakeInferenceController{snapshot: inference.Snapshot{
+		ActiveProvider: "openai",
+		Providers:      []inference.ProviderState{{ID: "openai", Name: "OpenAI", Active: true, Model: "gpt-dashboard", AuthMode: "chatgpt"}},
+		Overrides: []config.Override{
+			{Variable: "OPENAI_MODEL", Environment: "gpt-environment", InEffect: "gpt-dashboard"},
+			{Variable: "OPENAI_REASONING_EFFORT", Environment: "high", InEffect: ""},
+		},
+	}}
+	accounts := &fakeOpenAIAuthController{snapshot: openauth.Snapshot{Problem: "The saved ChatGPT credentials could not be read. Connect the account again."}}
+	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, OpenAIAuth: accounts, CSRFToken: "test-token"})
+	rec := httptest.NewRecorder()
+	dashboard.HandleIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?section=inference&provider=openai", http.NoBody))
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Saved dashboard settings replace these environment variables.",
+		"<code>OPENAI_MODEL</code>: environment gpt-environment, in use gpt-dashboard",
+		"<code>OPENAI_REASONING_EFFORT</code>: environment high, in use provider default",
+		"The saved ChatGPT credentials could not be read.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body is missing %q", want)
+		}
+	}
+}
+
 func TestHandleIndexUsesOneTabbedProviderPanel(t *testing.T) {
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
 		ActiveProvider: "openai-compatible",
-		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI", Model: "gpt-test"},
-		Compatible:     inference.ProviderState{ID: "openai-compatible", Name: "OpenAI-compatible", Active: true, Model: "local-model", BaseURL: "http://127.0.0.1:11434/v1"},
-		Anthropic:      inference.ProviderState{ID: "anthropic", Name: "Anthropic", Model: "claude-test"},
+		Providers: []inference.ProviderState{
+			{ID: "openai", Name: "OpenAI", Model: "gpt-test"},
+			{ID: "openai-compatible", Name: "OpenAI-compatible", Active: true, Model: "local-model", BaseURL: "http://127.0.0.1:11434/v1"},
+			{ID: "anthropic", Name: "Anthropic", Model: "claude-test"},
+		},
 	}}
 	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, CSRFToken: "test-token"})
 	rec := httptest.NewRecorder()
@@ -293,6 +325,9 @@ func TestHandleIndexUsesOneTabbedProviderPanel(t *testing.T) {
 	}
 	if !strings.Contains(body, "OAI Compat.") {
 		t.Error("compatible provider tab does not use the compact OpenAI label")
+	}
+	if !strings.Contains(body, `name="api_format"`) || !strings.Contains(body, `value="chat-completions"`) {
+		t.Error("compatible panel must expose an explicit wire format")
 	}
 }
 
@@ -350,10 +385,12 @@ func TestHandleProviderUpdateUsesCSRFAndController(t *testing.T) {
 func TestProviderAPIKeyControlsAreMaskedAndProtected(t *testing.T) {
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
 		ActiveProvider: "openai",
-		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI", Model: "gpt-test"},
-		Anthropic: inference.ProviderState{
-			ID: "anthropic", Name: "Anthropic", Model: "claude-test", ManagedAPIKey: true,
-			CredentialConfigured: true, CredentialSource: "Saved locally",
+		Providers: []inference.ProviderState{
+			{ID: "openai", Name: "OpenAI", Model: "gpt-test"},
+			{
+				ID: "anthropic", Name: "Anthropic", Model: "claude-test", ManagedAPIKey: true,
+				CredentialConfigured: true, CredentialSource: "Saved locally",
+			},
 		},
 	}}
 	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, CSRFToken: "test-token"})
@@ -404,7 +441,7 @@ func TestProviderAPIKeyControlsAreMaskedAndProtected(t *testing.T) {
 func TestOpenAIAccountControlsRenderAndMutationsRequireCSRF(t *testing.T) {
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
 		ActiveProvider: "openai",
-		OpenAI:         inference.ProviderState{ID: "openai", Name: "OpenAI / compatible", Active: true, Model: "gpt-test", AuthMode: "chatgpt", ChatGPTConnected: true, CredentialConfigured: true},
+		Providers:      []inference.ProviderState{{ID: "openai", Name: "OpenAI / compatible", Active: true, Model: "gpt-test", AuthMode: "chatgpt", ChatGPTConnected: true, CredentialConfigured: true}},
 	}}
 	authentication := &fakeOpenAIAuthController{snapshot: openauth.Snapshot{Connected: true}}
 	dashboard := NewDashboard(&fakeStore{}, Options{Inference: controller, OpenAIAuth: authentication, CSRFToken: "test-token"})
@@ -538,7 +575,7 @@ func TestHandleScriptsServesSameOriginFormTransport(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "text/javascript") {
 		t.Fatalf("script response = %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"fetch(action", `hasAttribute("formaction")`, "X-Brainslug-Dashboard", "window.location.assign", "auth.openai.com"} {
+	for _, want := range []string{"fetch(action", `getAttribute("formaction")`, `form.getAttribute("action")`, "fields.append(submitter.name, submitter.value)", "X-Brainslug-Dashboard", "window.location.assign", "auth.openai.com"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("dashboard script is missing %q", want)
 		}

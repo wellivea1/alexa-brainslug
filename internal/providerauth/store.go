@@ -8,9 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/wellivea1/alexa-brainslug/internal/securefile"
 )
 
 const (
@@ -115,9 +116,7 @@ func (s *Store) load() error {
 		return fmt.Errorf("read provider credential file: %w", err)
 	}
 	var stored credentialFile
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&stored); err != nil {
+	if err := securefile.DecodeJSON(data, &stored); err != nil {
 		return fmt.Errorf("decode provider credential file: %w", err)
 	}
 	if stored.Version != credentialVersion {
@@ -139,14 +138,8 @@ func (s *Store) writeLocked(credentials map[string]credential) error {
 	if err != nil {
 		return fmt.Errorf("encode provider credentials: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
-		return fmt.Errorf("create provider credential directory: %w", err)
-	}
-	if err := os.WriteFile(s.path, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write provider credential file: %w", err)
-	}
-	if err := os.Chmod(s.path, 0o600); err != nil {
-		return fmt.Errorf("protect provider credential file: %w", err)
+	if err := securefile.Write(s.path, append(data, '\n')); err != nil {
+		return fmt.Errorf("save provider credential file: %w", err)
 	}
 	return nil
 }

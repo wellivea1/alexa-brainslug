@@ -52,6 +52,11 @@ type RequestPayload struct {
 	Locale    string  `json:"locale"`
 	Intent    *Intent `json:"intent,omitempty"`
 	Reason    string  `json:"reason,omitempty"`
+
+	// DialogState is STARTED, IN_PROGRESS, or COMPLETED for an intent with a
+	// dialog model. Alexa rejects Dialog.Delegate back into the same intent
+	// once the dialog is COMPLETED.
+	DialogState string `json:"dialogState,omitempty"`
 }
 
 // Intent is the matched intent and its slots.

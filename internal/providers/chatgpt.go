@@ -15,9 +15,7 @@ import (
 	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/config"
-	"github.com/wellivea1/alexa-brainslug/internal/prompts"
 	"github.com/wellivea1/alexa-brainslug/internal/security"
-	"github.com/wellivea1/alexa-brainslug/internal/speech"
 )
 
 const chatGPTCodexResponsesURL = "https://chatgpt.com/backend-api/codex/responses"
@@ -72,8 +70,16 @@ func (p *ChatGPT) Ask(ctx context.Context, req Request) (Response, error) {
 	if p.credentials == nil || !p.credentials.Connected() {
 		return Response{}, fmt.Errorf("%w: connect a ChatGPT account in the dashboard", ErrNotConfigured)
 	}
-	accessToken, accountID, err := p.credentials.Token(ctx)
+
+	// The timeout covers a token refresh as well as the model call: a slow
+	// refresh spends the same voice budget as a slow answer.
+	callCtx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	accessToken, accountID, err := p.credentials.Token(callCtx)
 	if err != nil {
+		if callCtx.Err() != nil {
+			return Response{}, fmt.Errorf("refresh ChatGPT credentials: %w", callCtx.Err())
+		}
 		return Response{}, fmt.Errorf("%w: %w", ErrNotConfigured, err)
 	}
 	model := strings.TrimSpace(req.Model)
@@ -93,9 +99,6 @@ func (p *ChatGPT) Ask(ctx context.Context, req Request) (Response, error) {
 	}
 	maxTokens = max(maxTokens, minOutputTokens)
 	instructions := strings.TrimSpace(req.SystemPrompt)
-	if instructions == "" {
-		instructions = prompts.DefaultSystemPrompt
-	}
 
 	payload := chatGPTRequest{
 		Model:        model,
@@ -116,8 +119,6 @@ func (p *ChatGPT) Ask(ctx context.Context, req Request) (Response, error) {
 		return Response{}, fmt.Errorf("encode ChatGPT request: %w", err)
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
 	httpRequest, err := http.NewRequestWithContext(callCtx, http.MethodPost, p.endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return Response{}, fmt.Errorf("build ChatGPT request: %w", err)
@@ -174,7 +175,6 @@ func (p *ChatGPT) Ask(ctx context.Context, req Request) (Response, error) {
 		return Response{}, ErrEmptyResponse
 	}
 	return Response{
-		ShortAnswer:  speech.Summarize(full, spokenWordLimit),
 		FullAnswer:   full,
 		Model:        firstNonEmpty(decoded.Model, model),
 		ProviderName: openAIName,

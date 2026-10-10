@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wellivea1/alexa-brainslug/internal/app"
 )
@@ -16,18 +17,21 @@ type fakeApplication struct {
 	askRequest      app.AskRequest
 	askAnswer       app.Answer
 	askErr          error
+	askDeadline     time.Time
+	askHasDeadline  bool
 	latestPrincipal app.Principal
 	latestAnswer    app.Answer
 	latestErr       error
 }
 
-func (a *fakeApplication) Ask(_ context.Context, req app.AskRequest) (app.Answer, error) {
+func (a *fakeApplication) Ask(ctx context.Context, req app.AskRequest) (app.Answer, error) {
 	a.askRequest = req
+	a.askDeadline, a.askHasDeadline = ctx.Deadline()
 	if a.askErr != nil {
 		return app.Answer{}, a.askErr
 	}
-	if a.askAnswer.ShortAnswer == "" && a.askAnswer.FullAnswer == "" {
-		return app.Answer{ShortAnswer: "Go is a programming language."}, nil
+	if a.askAnswer.FullAnswer == "" {
+		return app.Answer{FullAnswer: "Go is a programming language."}, nil
 	}
 	return a.askAnswer, nil
 }
@@ -108,14 +112,35 @@ func TestHandlerRoutesAskGPTIntent(t *testing.T) {
 	if application.askRequest.ConversationID != "session-1" {
 		t.Errorf("conversation ID = %q", application.askRequest.ConversationID)
 	}
+	if application.askRequest.SystemPrompt != voiceSystemPrompt {
+		t.Errorf("Alexa instructions = %q", application.askRequest.SystemPrompt)
+	}
 	wantPrincipal := app.Principal{Namespace: "alexa", Subject: "user-1"}
 	if application.askRequest.Principal != wantPrincipal {
 		t.Errorf("principal = %+v, want %+v", application.askRequest.Principal, wantPrincipal)
 	}
 }
 
+// The application runs under one deadline set when the request arrives, so
+// the provider cannot run past the point where Alexa has already given up.
+func TestHandlerAppliesResponseBudget(t *testing.T) {
+	application := &fakeApplication{}
+	handler := NewHandler(testOptions(), application)
+
+	before := time.Now()
+	postAlexa(t, handler, askIntentBody)
+	after := time.Now()
+
+	if !application.askHasDeadline {
+		t.Fatal("application context has no deadline")
+	}
+	if application.askDeadline.Before(before.Add(ResponseBudget)) || application.askDeadline.After(after.Add(ResponseBudget)) {
+		t.Errorf("deadline = %v, want %v after the request arrived", application.askDeadline, ResponseBudget)
+	}
+}
+
 func TestHandlerRoutesLastResponseIntent(t *testing.T) {
-	application := &fakeApplication{latestAnswer: app.Answer{ShortAnswer: "previous answer"}}
+	application := &fakeApplication{latestAnswer: app.Answer{FullAnswer: "previous answer"}}
 	handler := NewHandler(testOptions(), application)
 
 	resp := handler.Route(t.Context(), &RequestEnvelope{
@@ -131,6 +156,32 @@ func TestHandlerRoutesLastResponseIntent(t *testing.T) {
 	}
 	if application.latestPrincipal.Subject != "user-1" {
 		t.Errorf("latest principal = %+v", application.latestPrincipal)
+	}
+}
+
+func TestHandlerShapesNewAndSavedAnswersForVoice(t *testing.T) {
+	full := "# The answer\n\n**Keep the useful conclusion.** " + strings.Repeat("More detail follows. ", 100)
+	application := &fakeApplication{
+		askAnswer: app.Answer{FullAnswer: full}, latestAnswer: app.Answer{FullAnswer: full},
+	}
+	handler := NewHandler(testOptions(), application)
+	newAnswer := decodeResponse(t, postAlexa(t, handler, askIntentBody)).Response.OutputSpeech.Text
+	recalled := handler.Route(t.Context(), &RequestEnvelope{
+		Session: Session{User: User{UserID: "user-1"}},
+		Request: RequestPayload{Type: requestTypeIntent, Intent: &Intent{Name: IntentLastResponse}},
+	}).Response.OutputSpeech.Text
+	if newAnswer != recalled {
+		t.Fatalf("new answer and recall differ: %q / %q", newAnswer, recalled)
+	}
+	if !strings.HasPrefix(newAnswer, "The answer\n\nKeep the useful conclusion.") &&
+		!strings.HasPrefix(newAnswer, "The answer Keep the useful conclusion.") {
+		t.Fatalf("the useful conclusion was lost: %q", newAnswer)
+	}
+	if strings.ContainsAny(newAnswer, "#*") || len(strings.Fields(newAnswer)) > 126 || !strings.HasSuffix(newAnswer, "That is the short version.") {
+		t.Fatalf("answer was not shaped for voice: %q", newAnswer)
+	}
+	if application.askAnswer.FullAnswer != full || application.askRequest.SystemPrompt != voiceSystemPrompt {
+		t.Fatal("Alexa must supply voice instructions without changing the full answer")
 	}
 }
 
@@ -208,21 +259,91 @@ func TestSpeechForApplicationError(t *testing.T) {
 }
 
 func TestHandlerAsksForAQuestionWhenSlotIsEmpty(t *testing.T) {
-	application := &fakeApplication{}
+	tests := []struct {
+		name         string
+		dialogState  string
+		wantDelegate bool
+	}{
+		{"no dialog state re-enters the dialog", "", true},
+		{"in-progress dialog re-enters the dialog", "IN_PROGRESS", true},
+		// Alexa rejects a delegate back into a COMPLETED dialog's own intent.
+		{"completed dialog asks without a directive", dialogStateCompleted, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			application := &fakeApplication{}
+			handler := NewHandler(testOptions(), application)
+
+			resp := handler.Route(t.Context(), &RequestEnvelope{
+				Session: Session{User: User{UserID: "user-1"}},
+				Request: RequestPayload{
+					Type:        requestTypeIntent,
+					DialogState: tt.dialogState,
+					Intent:      &Intent{Name: IntentAskGPT},
+				},
+			})
+
+			if resp.Response.ShouldEndSession {
+				t.Error("the session should stay open so the user can answer")
+			}
+			if application.askRequest.Prompt != "" {
+				t.Error("the application must not be called without a question")
+			}
+			gotDelegate := len(resp.Response.Directives) == 1 &&
+				resp.Response.Directives[0].Type == directiveDialogDelegate &&
+				resp.Response.Directives[0].UpdatedIntent.Name == IntentAskGPT
+			if gotDelegate != tt.wantDelegate {
+				t.Errorf("delegate = %v, want %v (directives %+v)", gotDelegate, tt.wantDelegate, resp.Response.Directives)
+			}
+		})
+	}
+}
+
+func TestHandlerAnswersRetrievalPhraseFromHistory(t *testing.T) {
+	application := &fakeApplication{latestAnswer: app.Answer{FullAnswer: "previous answer"}}
 	handler := NewHandler(testOptions(), application)
 
+	// "Last response" spoken in answer to "What should I ask?" can arrive as
+	// the Query slot of AskGPTIntent instead of as LastResponseIntent.
 	resp := handler.Route(t.Context(), &RequestEnvelope{
+		Session: Session{User: User{UserID: "user-1"}},
 		Request: RequestPayload{
-			Type:   requestTypeIntent,
-			Intent: &Intent{Name: IntentAskGPT},
+			Type: requestTypeIntent,
+			Intent: &Intent{
+				Name:  IntentAskGPT,
+				Slots: map[string]Slot{slotQuery: {Name: slotQuery, Value: "Last response."}},
+			},
 		},
 	})
 
-	if resp.Response.ShouldEndSession {
-		t.Error("the session should stay open so the user can answer")
+	if got := resp.Response.OutputSpeech.Text; got != "previous answer" {
+		t.Errorf("speech = %q, want the saved answer", got)
 	}
 	if application.askRequest.Prompt != "" {
-		t.Error("the application must not be called without a question")
+		t.Errorf("a retrieval phrase must not be sent to the provider: %+v", application.askRequest)
+	}
+	if application.latestPrincipal.Subject != "user-1" {
+		t.Errorf("latest principal = %+v", application.latestPrincipal)
+	}
+}
+
+func TestIsLastResponseRequest(t *testing.T) {
+	tests := []struct {
+		query string
+		want  bool
+	}{
+		{"last response", true},
+		{"  The LAST answer?  ", true},
+		{"what was the last answer", true},
+		{"what is the last answer in a game of jeopardy", false},
+		{"why is the sky blue", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isLastResponseRequest(tt.query); got != tt.want {
+			t.Errorf("isLastResponseRequest(%q) = %v, want %v", tt.query, got, tt.want)
+		}
 	}
 }
 

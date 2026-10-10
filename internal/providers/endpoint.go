@@ -13,8 +13,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/wellivea1/alexa-brainslug/internal/prompts"
 )
 
 const (
@@ -106,16 +104,11 @@ func (e endpoint) resolve(req Request, keyName, modelName string) (call, error) 
 	}
 	maxTokens = max(maxTokens, minOutputTokens)
 
-	systemPrompt := strings.TrimSpace(req.SystemPrompt)
-	if systemPrompt == "" {
-		systemPrompt = prompts.DefaultSystemPrompt
-	}
-
 	return call{
 		model:        model,
 		prompt:       prompt,
 		maxTokens:    maxTokens,
-		systemPrompt: systemPrompt,
+		systemPrompt: strings.TrimSpace(req.SystemPrompt),
 	}, nil
 }
 

@@ -71,9 +71,6 @@ func TestOpenAIAskUsesOutputText(t *testing.T) {
 	if resp.FullAnswer != "Go is a compiled language." {
 		t.Errorf("FullAnswer = %q", resp.FullAnswer)
 	}
-	if resp.ShortAnswer != "Go is a compiled language." {
-		t.Errorf("ShortAnswer = %q", resp.ShortAnswer)
-	}
 	// The provider reports the resolved model, which can differ from the
 	// requested alias. History should record what actually answered.
 	if resp.Model != "gpt-test-2026" {
@@ -263,9 +260,7 @@ func TestOpenAIAskRejectsMissingConfiguration(t *testing.T) {
 	}
 }
 
-// A long answer is shortened for speech, but the full text is preserved for
-// storage.
-func TestOpenAIAskShortensLongAnswersForSpeech(t *testing.T) {
+func TestOpenAIAskPreservesLongAnswers(t *testing.T) {
 	long := strings.Repeat("word ", 400)
 	payload, err := json.Marshal(map[string]string{"output_text": long})
 	if err != nil {
@@ -278,9 +273,6 @@ func TestOpenAIAskShortensLongAnswersForSpeech(t *testing.T) {
 		t.Fatalf("Ask() error = %v", err)
 	}
 
-	if len(strings.Fields(resp.ShortAnswer)) > spokenWordLimit+10 {
-		t.Errorf("short answer is %d words, want roughly %d", len(strings.Fields(resp.ShortAnswer)), spokenWordLimit)
-	}
 	if len(strings.Fields(resp.FullAnswer)) != 400 {
 		t.Errorf("full answer was truncated: %d words", len(strings.Fields(resp.FullAnswer)))
 	}

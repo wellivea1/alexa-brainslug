@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>{{.PageTitle}} · Brainslug</title>
   <link rel="stylesheet" href="/assets/dashboard.css?v=10">
-  <script src="/assets/dashboard.js?v=3" defer></script>
+  <script src="/assets/dashboard.js?v=5" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -36,6 +36,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a4 4 0 0 1 4 4v1h1a4 4 0 0 1 2 7.46V17a4 4 0 0 1-4 4h-1.54A4 4 0 0 1 12 22a4 4 0 0 1-1.46-1H9a4 4 0 0 1-4-4v-2.54A4 4 0 0 1 7 7h1V6a4 4 0 0 1 4-4Zm0 2a2 2 0 0 0-2 2v3H8a2 2 0 1 0 0 4h2v4a2 2 0 1 0 4 0v-4h2a2 2 0 1 0 0-4h-2V6a2 2 0 0 0-2-2Z"/></svg>
           Inference
         </a>
+        <a href="/codex">Codex tasks</a>
       </nav>
 
       <div class="sidebar-foot">
@@ -70,6 +71,7 @@
         <a href="/?section=overview" {{if eq .Section "overview"}}aria-current="page"{{end}}>Overview</a>
         <a href="/?section=activity" {{if eq .Section "activity"}}aria-current="page"{{end}}>Activity</a>
         <a href="/?section=inference" {{if eq .Section "inference"}}aria-current="page"{{end}}>Inference</a>
+        <a href="/codex">Codex tasks</a>
       </nav>
 
       <main>
@@ -162,7 +164,7 @@
             <input type="hidden" name="section" value="activity">
             <label class="search-field"><span class="sr-only">Search activity</span><input type="search" name="query" value="{{.Query}}" placeholder="Search prompts, answers, models…"></label>
             <label><span class="sr-only">Filter by status</span><select name="status"><option value="all">All statuses</option><option value="ok" {{if eq .StatusFilter "ok"}}selected{{end}}>Successful</option><option value="error" {{if eq .StatusFilter "error"}}selected{{end}}>Errors</option></select></label>
-            <label><span class="sr-only">Filter by provider</span><select name="provider_filter"><option value="all">All providers</option><option value="openai" {{if eq .ProviderFilter "openai"}}selected{{end}}>OpenAI</option><option value="openai-compatible" {{if eq .ProviderFilter "openai-compatible"}}selected{{end}}>OpenAI-compatible</option><option value="anthropic" {{if eq .ProviderFilter "anthropic"}}selected{{end}}>Anthropic</option></select></label>
+            <label><span class="sr-only">Filter by provider</span><select name="provider_filter"><option value="all">All providers</option>{{range .Inference.Providers}}<option value="{{.ID}}" {{if eq $.ProviderFilter .ID}}selected{{end}}>{{.Name}}</option>{{end}}</select></label>
             <button class="button button-primary" type="submit">Filter</button>
             {{if or .Query .StatusFilter .ProviderFilter}}<a class="button button-quiet" href="/?section=activity">Clear</a>{{end}}
           </form>
@@ -209,160 +211,101 @@
           </header>
 
           <nav class="provider-tabs" aria-label="Inference providers" role="tablist">
-            <a href="/?section=inference&amp;provider=openai" role="tab" aria-selected="{{if eq .ProviderTab "openai"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai"}}aria-current="page"{{end}}>OpenAI{{if .Inference.OpenAI.Active}}<span>Active</span>{{end}}</a>
-            <a href="/?section=inference&amp;provider=openai-compatible" role="tab" aria-selected="{{if eq .ProviderTab "openai-compatible"}}true{{else}}false{{end}}" {{if eq .ProviderTab "openai-compatible"}}aria-current="page"{{end}}>OAI Compat.{{if .Inference.Compatible.Active}}<span>Active</span>{{end}}</a>
-            <a href="/?section=inference&amp;provider=anthropic" role="tab" aria-selected="{{if eq .ProviderTab "anthropic"}}true{{else}}false{{end}}" {{if eq .ProviderTab "anthropic"}}aria-current="page"{{end}}>Anthropic{{if .Inference.Anthropic.Active}}<span>Active</span>{{end}}</a>
+            {{range .Inference.Providers}}
+            <a href="/?section=inference&amp;provider={{.ID}}" role="tab" aria-selected="{{if eq $.ProviderTab .ID}}true{{else}}false{{end}}" {{if eq $.ProviderTab .ID}}aria-current="page"{{end}}>{{.Definition.TabName}}{{if .Active}}<span>Active</span>{{end}}</a>
+            {{end}}
           </nav>
 
-          {{if eq .ProviderTab "openai"}}
-          <div class="provider-panel" role="tabpanel" aria-labelledby="openai-provider-title">
+          {{if .Inference.Overrides}}
+          <div class="notice notice-warn settings-overrides" role="status">
+            <strong>Saved dashboard settings replace these environment variables.</strong>
+            <ul>{{range .Inference.Overrides}}<li><code>{{.Variable}}</code>: environment {{if .Environment}}{{.Environment}}{{else}}provider default{{end}}, in use {{if .InEffect}}{{.InEffect}}{{else}}provider default{{end}}</li>{{end}}</ul>
+            <small>Saving the environment value here removes an override.</small>
+          </div>
+          {{end}}
+
+          {{with .SelectedProvider}}
+          <div class="provider-panel" role="tabpanel" aria-labelledby="{{.Definition.PanelID}}-provider-title">
             <aside class="provider-context">
               <div class="provider-identity">
-                <span class="provider-monogram" aria-hidden="true">O</span>
-                <span><h3 id="openai-provider-title">OpenAI</h3><small>{{.Inference.OpenAI.EndpointKind}}</small></span>
+                <span class="provider-monogram provider-monogram-{{.Definition.PanelID}}" aria-hidden="true">{{.Definition.Monogram}}</span>
+                <span><h3 id="{{.Definition.PanelID}}-provider-title">{{.Name}}</h3><small>{{.EndpointKind}}</small></span>
               </div>
               <div class="provider-health">
-                <span class="health-icon {{if .Inference.OpenAI.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
-                <span><strong>{{if .Inference.OpenAI.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.OpenAI.CredentialSource}}</small></span>
+                <span class="health-icon {{if .CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
+                <span><strong>{{if .CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.CredentialSource}}</small></span>
               </div>
             </aside>
             <form class="provider-form" method="post" action="/settings/provider">
-              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
               <input type="hidden" name="section" value="inference">
-              <input type="hidden" name="provider" value="openai">
+              <input type="hidden" name="provider" value="{{.ID}}">
+              {{if .Definition.AccountAuth}}
               <section class="form-section" aria-labelledby="openai-auth-title">
                 <header class="form-section-head"><div><strong id="openai-auth-title">Authentication</strong><small>Choose one credential path.</small></div></header>
                 <div class="auth-options">
-                  <div class="auth-choice {{if eq .Inference.OpenAI.AuthMode "api_key"}}is-selected{{end}}">
-                    <input id="openai-auth-api" type="radio" name="auth_mode" value="api_key" {{if eq .Inference.OpenAI.AuthMode "api_key"}}checked{{end}}>
+                  <div class="auth-choice {{if eq .AuthMode "api_key"}}is-selected{{end}}">
+                    <input id="openai-auth-api" type="radio" name="auth_mode" value="api_key" {{if eq .AuthMode "api_key"}}checked{{end}}>
                     <label for="openai-auth-api"><strong>OpenAI API key</strong><small>Official OpenAI API</small></label>
-                    <span class="connection-state {{if .Inference.OpenAI.APIKeyConfigured}}text-ok{{else}}text-warn{{end}}">{{.Inference.OpenAI.APIKeySource}}</span>
+                    <span class="connection-state {{if .APIKeyConfigured}}text-ok{{else}}text-warn{{end}}">{{.APIKeySource}}</span>
                   </div>
                   <div class="api-key-editor">
                     <label class="field" for="openai-api-key"><span>API key</span><span class="field-control"><input id="openai-api-key" type="password" name="api_key" placeholder="Paste a new API key" autocomplete="new-password"><small>The saved value is never displayed again.</small></span></label>
                     <span class="auth-actions">
                       <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/provider/api-key">Save key</button>
-                      {{if .Inference.OpenAI.ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
+                      {{if .ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
                     </span>
                   </div>
-                  <div class="auth-choice {{if eq .Inference.OpenAI.AuthMode "chatgpt"}}is-selected{{end}}">
-                    <input id="openai-auth-chatgpt" type="radio" name="auth_mode" value="chatgpt" {{if eq .Inference.OpenAI.AuthMode "chatgpt"}}checked{{end}}>
+                  <div class="auth-choice {{if eq .AuthMode "chatgpt"}}is-selected{{end}}">
+                    <input id="openai-auth-chatgpt" type="radio" name="auth_mode" value="chatgpt" {{if eq .AuthMode "chatgpt"}}checked{{end}}>
                     <label for="openai-auth-chatgpt"><strong>ChatGPT account</strong><small>Plus / Pro account · Codex connector</small></label>
-                    <span class="connection-state {{if .OpenAIAuth.Connected}}text-ok{{else}}text-warn{{end}}">{{if .OpenAIAuth.Connected}}Connected{{else}}Not connected{{end}}</span>
+                    <span class="connection-state {{if $.OpenAIAuth.Connected}}text-ok{{else}}text-warn{{end}}">{{if $.OpenAIAuth.Connected}}Connected{{else}}Not connected{{end}}</span>
                     <span class="auth-actions">
-                      <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/openai/browser">{{if .OpenAIAuth.Connected}}Reconnect{{else}}Connect{{end}}</button>
+                      <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/openai/browser">{{if $.OpenAIAuth.Connected}}Reconnect{{else}}Connect{{end}}</button>
                       <button class="button button-quiet" type="submit" formnovalidate formaction="/auth/openai/device/start">Use code</button>
-                      {{if .OpenAIAuth.Connected}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/openai/disconnect">Disconnect</button>{{end}}
+                      {{if $.OpenAIAuth.Connected}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/openai/disconnect">Disconnect</button>{{end}}
                     </span>
                   </div>
+                  {{if $.OpenAIAuth.Problem}}<p class="notice notice-error" role="alert">{{$.OpenAIAuth.Problem}}</p>{{end}}
                 </div>
               </section>
-              <section class="form-section" aria-labelledby="openai-model-title">
-                <header class="form-section-head"><div><strong id="openai-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
-                <div class="form-rows">
-                  <label class="field"><span>Model</span><span class="field-control"><input name="model" list="openai-models" value="{{.Inference.OpenAI.Model}}" required autocomplete="off"><small>Suggested model or exact OpenAI model ID.</small></span></label>
-                </div>
-              </section>
-              <datalist id="openai-models">{{range .OpenAIModels}}<option value="{{.ID}}">{{.Name}} — {{.Description}}</option>{{end}}</datalist>
-              <details class="advanced-settings">
-                <summary>Request settings</summary>
-                <div class="form-rows advanced-grid">
-                  <label class="field"><span>Reasoning effort</span><span class="field-control"><select name="reasoning_effort"><option value="" {{if eq .Inference.OpenAI.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.OpenAI.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.OpenAI.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.OpenAI.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.OpenAI.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select></span></label>
-                  <label class="field"><span>Text verbosity</span><span class="field-control"><select name="text_verbosity"><option value="" {{if eq .Inference.OpenAI.TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .Inference.OpenAI.TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.OpenAI.TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.OpenAI.TextVerbosity "high"}}selected{{end}}>High</option></select></span></label>
-                  <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.OpenAI.MaxOutputTokens}}" required></span></label>
-                  <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.OpenAI.TimeoutSeconds}}" required></span></label>
-                </div>
-              </details>
-              <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.OpenAI.Active}}Save settings{{else}}Use OpenAI{{end}}</button></div>
-            </form>
-          </div>
-          {{else if eq .ProviderTab "openai-compatible"}}
-          <div class="provider-panel" role="tabpanel" aria-labelledby="compatible-provider-title">
-            <aside class="provider-context">
-              <div class="provider-identity">
-                <span class="provider-monogram provider-monogram-compatible" aria-hidden="true">C</span>
-                <span><h3 id="compatible-provider-title">OpenAI-compatible</h3><small>{{.Inference.Compatible.EndpointKind}}</small></span>
-              </div>
-              <div class="provider-health">
-                <span class="health-icon {{if .Inference.Compatible.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
-                <span><strong>{{if .Inference.Compatible.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.Compatible.CredentialSource}}</small></span>
-              </div>
-            </aside>
-            <form class="provider-form" method="post" action="/settings/provider">
-              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-              <input type="hidden" name="section" value="inference">
-              <input type="hidden" name="provider" value="openai-compatible">
-              <input type="hidden" name="auth_mode" value="api_key">
-              <section class="form-section" aria-labelledby="compatible-auth-title">
-                <header class="form-section-head"><div><strong id="compatible-auth-title">Authentication</strong><small>Credential for this compatible endpoint.</small></div></header>
+              {{else}}
+              <section class="form-section" aria-labelledby="{{.Definition.PanelID}}-auth-title">
+                <header class="form-section-head"><div><strong id="{{.Definition.PanelID}}-auth-title">Authentication</strong><small>API credentials for {{.Name}}.</small></div></header>
                 <div class="api-key-editor">
-                  <label class="field" for="compatible-api-key"><span>API key</span><span class="field-control"><input id="compatible-api-key" type="password" name="api_key" placeholder="Paste a new API key" autocomplete="new-password"><small>{{.Inference.Compatible.CredentialSource}} · the saved value is never displayed again.</small></span></label>
+                  <label class="field" for="{{.Definition.PanelID}}-api-key"><span>{{.Name}} API key</span><span class="field-control"><input id="{{.Definition.PanelID}}-api-key" type="password" name="api_key" placeholder="Paste a new API key" autocomplete="new-password"><small>{{.CredentialSource}} - the saved value is never displayed again.</small></span></label>
                   <span class="auth-actions">
                     <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/provider/api-key">Save key</button>
-                    {{if .Inference.Compatible.ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
+                    {{if .ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
                   </span>
                 </div>
               </section>
-              <section class="form-section" aria-labelledby="compatible-model-title">
-                <header class="form-section-head"><div><strong id="compatible-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
+              {{end}}
+              <section class="form-section" aria-labelledby="{{.Definition.PanelID}}-model-title">
+                <header class="form-section-head"><div><strong id="{{.Definition.PanelID}}-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
                 <div class="form-rows">
-                  <label class="field"><span>Model</span><span class="field-control"><input name="model" value="{{.Inference.Compatible.Model}}" placeholder="model-id" required autocomplete="off"><small>Use the exact model ID exposed by the server.</small></span></label>
-                  <label class="field"><span>Base URL</span><span class="field-control"><input type="url" name="base_url" value="{{.Inference.Compatible.BaseURL}}" placeholder="http://127.0.0.1:11434/v1" required><small>Responses-compatible API root, including <code>/v1</code> when required.</small></span></label>
+                  <label class="field"><span>Model</span><span class="field-control"><input name="model" {{if .Definition.AccountAuth}}list="openai-models"{{end}} value="{{.Model}}" placeholder="model-id" required autocomplete="off"><small>Use the exact model ID available from this provider.</small></span></label>
+                  {{if not .Definition.AccountAuth}}
+                  <label class="field"><span>Base URL</span><span class="field-control"><input type="url" name="base_url" value="{{.BaseURL}}" placeholder="{{if .Definition.DefaultBaseURL}}{{.Definition.DefaultBaseURL}}{{else}}http://127.0.0.1:11434/v1{{end}}" {{if .Definition.RequireBaseURL}}required{{end}}><small>{{if .Definition.RequireBaseURL}}API root, including /v1 when required.{{else}}Leave blank for the official endpoint.{{end}}</small></span></label>
+                  {{end}}
+                  {{if .Definition.SelectableFormat}}
+                  <label class="field"><span>API format</span><span class="field-control"><select name="api_format"><option value="responses" {{if ne .APIFormat "chat-completions"}}selected{{end}}>Responses</option><option value="chat-completions" {{if eq .APIFormat "chat-completions"}}selected{{end}}>Chat Completions</option></select><small>Choose the API supported by your server.</small></span></label>
+                  {{end}}
                 </div>
               </section>
+              {{if .Definition.AccountAuth}}<datalist id="openai-models">{{range $.OpenAIModels}}<option value="{{.ID}}">{{.Name}} - {{.Description}}</option>{{end}}</datalist>{{end}}
               <details class="advanced-settings">
                 <summary>Request settings</summary>
                 <div class="form-rows advanced-grid">
-                  <label class="field"><span>Reasoning effort</span><span class="field-control"><select name="reasoning_effort"><option value="" {{if eq .Inference.Compatible.ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .Inference.Compatible.ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .Inference.Compatible.ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.Compatible.ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.Compatible.ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .Inference.Compatible.ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .Inference.Compatible.ReasoningEffort "max"}}selected{{end}}>Maximum</option></select><small>Leave at provider default unless the server documents support.</small></span></label>
-                  <label class="field"><span>Text verbosity</span><span class="field-control"><select name="text_verbosity"><option value="" {{if eq .Inference.Compatible.TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .Inference.Compatible.TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .Inference.Compatible.TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .Inference.Compatible.TextVerbosity "high"}}selected{{end}}>High</option></select></span></label>
-                  <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.Compatible.MaxOutputTokens}}" required></span></label>
-                  <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.Compatible.TimeoutSeconds}}" required></span></label>
+                  {{if .Definition.ResponseControls}}
+                  <label class="field"><span>Reasoning effort</span><span class="field-control"><select name="reasoning_effort"><option value="" {{if eq .ReasoningEffort ""}}selected{{end}}>Provider default</option><option value="none" {{if eq .ReasoningEffort "none"}}selected{{end}}>None</option><option value="low" {{if eq .ReasoningEffort "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .ReasoningEffort "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .ReasoningEffort "high"}}selected{{end}}>High</option><option value="xhigh" {{if eq .ReasoningEffort "xhigh"}}selected{{end}}>Extra high</option><option value="max" {{if eq .ReasoningEffort "max"}}selected{{end}}>Maximum</option></select><small>Leave at provider default unless the model supports this control.</small></span></label>
+                  <label class="field"><span>Text verbosity</span><span class="field-control"><select name="text_verbosity"><option value="" {{if eq .TextVerbosity ""}}selected{{end}}>Provider default</option><option value="low" {{if eq .TextVerbosity "low"}}selected{{end}}>Low</option><option value="medium" {{if eq .TextVerbosity "medium"}}selected{{end}}>Medium</option><option value="high" {{if eq .TextVerbosity "high"}}selected{{end}}>High</option></select></span></label>
+                  {{end}}
+                  <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.MaxOutputTokens}}" required></span></label>
+                  <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="{{$.MaxTimeoutSeconds}}" value="{{.TimeoutSeconds}}" required></span></label>
                 </div>
               </details>
-              <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.Compatible.Active}}Save settings{{else}}Use compatible{{end}}</button></div>
-            </form>
-          </div>
-          {{else}}
-          <div class="provider-panel" role="tabpanel" aria-labelledby="anthropic-provider-title">
-            <aside class="provider-context">
-              <div class="provider-identity">
-                <span class="provider-monogram provider-monogram-alt" aria-hidden="true">A</span>
-                <span><h3 id="anthropic-provider-title">Anthropic</h3><small>{{.Inference.Anthropic.EndpointKind}}</small></span>
-              </div>
-              <div class="provider-health">
-                <span class="health-icon {{if .Inference.Anthropic.CredentialConfigured}}is-ok{{else}}is-warn{{end}}" aria-hidden="true"></span>
-                <span><strong>{{if .Inference.Anthropic.CredentialConfigured}}Credential ready{{else}}Credential required{{end}}</strong><small>{{.Inference.Anthropic.CredentialSource}}</small></span>
-              </div>
-            </aside>
-            <form class="provider-form" method="post" action="/settings/provider">
-              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-              <input type="hidden" name="section" value="inference">
-              <input type="hidden" name="provider" value="anthropic">
-              <section class="form-section" aria-labelledby="anthropic-auth-title">
-                <header class="form-section-head"><div><strong id="anthropic-auth-title">Authentication</strong><small>Direct Claude API access.</small></div></header>
-                <div class="api-key-editor">
-                  <label class="field" for="anthropic-api-key"><span>Anthropic API key</span><span class="field-control"><input id="anthropic-api-key" type="password" name="api_key" placeholder="Paste a new API key" autocomplete="new-password"><small>{{.Inference.Anthropic.CredentialSource}} · the saved value is never displayed again.</small></span></label>
-                  <span class="auth-actions">
-                    <button class="button button-secondary" type="submit" formnovalidate formaction="/auth/provider/api-key">Save key</button>
-                    {{if .Inference.Anthropic.ManagedAPIKey}}<button class="button button-quiet button-danger" type="submit" formnovalidate formaction="/auth/provider/api-key/remove">Remove saved key</button>{{end}}
-                  </span>
-                </div>
-              </section>
-              <section class="form-section" aria-labelledby="anthropic-model-title">
-                <header class="form-section-head"><div><strong id="anthropic-model-title">Model route</strong><small>Applied to new Alexa requests.</small></div></header>
-                <div class="form-rows">
-                  <label class="field"><span>Model</span><span class="field-control"><input name="model" value="{{.Inference.Anthropic.Model}}" placeholder="claude-model-id" required autocomplete="off"><small>Use the exact API model ID enabled for your account.</small></span></label>
-                  <label class="field"><span>Base URL</span><span class="field-control"><input type="url" name="base_url" value="{{.Inference.Anthropic.BaseURL}}" placeholder="https://api.anthropic.com/v1"><small>Leave blank for the official Anthropic endpoint.</small></span></label>
-                </div>
-              </section>
-              <details class="advanced-settings">
-                <summary>Request settings</summary>
-                <div class="form-rows advanced-grid">
-                  <label class="field"><span>Maximum output tokens</span><span class="field-control"><input type="number" name="max_output_tokens" min="16" max="128000" value="{{.Inference.Anthropic.MaxOutputTokens}}" required></span></label>
-                  <label class="field"><span>Timeout in seconds</span><span class="field-control"><input type="number" name="timeout_seconds" min="1" max="60" value="{{.Inference.Anthropic.TimeoutSeconds}}" required></span></label>
-                </div>
-              </details>
-              <div class="form-actions"><button class="button button-primary" type="submit">{{if .Inference.Anthropic.Active}}Save settings{{else}}Use Anthropic{{end}}</button></div>
+              <div class="form-actions"><button class="button button-primary" type="submit">{{if .Active}}Save settings{{else}}Use {{.Definition.TabName}}{{end}}</button></div>
             </form>
           </div>
           {{end}}

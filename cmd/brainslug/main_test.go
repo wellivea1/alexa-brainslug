@@ -52,6 +52,15 @@ func TestPublicHandlerExposesOnlyAlexa(t *testing.T) {
 	}
 }
 
+// The public write deadline follows the ASK response budget, not the provider
+// timeout selected at startup, which the dashboard can change later.
+func TestPublicServerWriteTimeoutCoversResponseBudget(t *testing.T) {
+	server := newPublicServer("127.0.0.1:0", http.NotFoundHandler())
+	if server.WriteTimeout <= alexa.ResponseBudget {
+		t.Fatalf("WriteTimeout = %v, want more than the %v response budget", server.WriteTimeout, alexa.ResponseBudget)
+	}
+}
+
 func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
 	directory := t.TempDir()
 	db, err := store.Open(t.Context(), filepath.Join(directory, "brainslug.db"))
@@ -72,7 +81,7 @@ func TestAdminHandlerDoesNotExposeAlexa(t *testing.T) {
 	}
 	controller := &fakeInferenceController{snapshot: inference.Snapshot{
 		ActiveProvider: config.ProviderOpenAI,
-		OpenAI:         inference.ProviderState{ID: config.ProviderOpenAI, Model: "gpt-test"},
+		Providers:      []inference.ProviderState{{ID: config.ProviderOpenAI, Model: "gpt-test"}},
 	}}
 	managementAuth, err := adminauth.New(filepath.Join(directory, "brainslug.admin-auth.json"), adminauth.Options{PasswordIterations: 1_000})
 	if err != nil {

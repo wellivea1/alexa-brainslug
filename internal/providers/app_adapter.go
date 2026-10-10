@@ -36,11 +36,10 @@ func (p *appProvider) Ask(ctx context.Context, req app.ProviderRequest) (app.Pro
 		return app.ProviderResponse{}, mapAppError(err)
 	}
 	return app.ProviderResponse{
-		ShortAnswer: response.ShortAnswer,
-		FullAnswer:  response.FullAnswer,
-		Provider:    response.ProviderName,
-		Model:       response.Model,
-		Latency:     response.Latency,
+		FullAnswer: response.FullAnswer,
+		Provider:   response.ProviderName,
+		Model:      response.Model,
+		Latency:    response.Latency,
 	}, nil
 }
 
@@ -62,6 +61,8 @@ func mapAppError(err error) error {
 		return errors.Join(app.ErrProviderNoText, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return errors.Join(app.ErrProviderUnavailable, err)
+	case errors.Is(err, context.Canceled):
+		return errors.Join(app.ErrRequestCanceled, err)
 	case errors.Is(err, ErrIncompleteResponse), errors.Is(err, ErrFailedResponse):
 		return errors.Join(app.ErrProviderFailed, err)
 	}

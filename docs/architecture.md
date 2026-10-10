@@ -64,7 +64,8 @@ internal/store
 Rules enforced by the current code:
 
 - `internal/app` contains no ASK request or response types.
-- `internal/alexa` does not import provider implementations, prompt policy, or concrete store records.
+- `internal/alexa` owns voice instructions and speech shaping without importing provider implementations or concrete store records.
+- `internal/app` and provider clients preserve full answers without choosing a presentation style.
 - Provider implementations do not select fallback providers or persist history.
 - The SQLite adapter maps application records to the legacy interactions schema.
 - Process wiring in `cmd/brainslug` selects concrete adapters.
@@ -89,6 +90,7 @@ AskRequest
   Principal
   ConversationID
   Prompt
+  SystemPrompt (chosen by the inbound adapter)
 ```
 
 The service:
@@ -101,7 +103,9 @@ The service:
 6. stores a success or failure when history is enabled;
 7. returns a transport-neutral answer.
 
-The ASK adapter decides the exact spoken wording for success and failure.
+The ASK adapter supplies voice instructions and shortens the full answer for
+speech. Provider clients return full text and the application stores it without
+voice shaping. Another inbound adapter can supply different instructions.
 
 ### LatestAnswer
 
@@ -113,6 +117,10 @@ The service reads the latest completed saved answer for the supplied principal. 
 - a completed answer.
 
 The current SQLite query returns the latest successful nonempty interaction. It does not know about pending jobs because job state does not exist yet.
+
+Alexa rebuilds the spoken version from the full saved answer using the same
+120-word cap as a new response. Older rows containing only a short answer remain
+readable; new rows do not need a stored voice summary.
 
 ## Principal Model
 
@@ -157,6 +165,25 @@ Provider adapters own:
 - vendor error classification;
 - respecting context cancellation and deadline.
 
+The compiled provider table in `internal/config/providers.go` supplies IDs,
+display names, environment prefixes, defaults, capabilities, and settings
+accessors. Configuration loading, credentials, settings persistence, snapshots,
+and dashboard panels iterate that table. Provider construction selects a client
+by wire format rather than branching on provider IDs.
+
+The compatible route explicitly selects `responses` or `chat-completions`.
+Responses uses `/responses`; Chat Completions uses `/chat/completions` with a
+system/user message list and `max_tokens` for compatibility with local servers.
+Reasoning effort and verbosity are sent only when explicitly configured.
+Length-limited and unfinished responses are classified as failures, and the
+client never retries another format. See the
+[Chat Completions API reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+for the message and finish-reason contract.
+
+Runtime settings version 3 stores optional overrides in a `providers` map keyed
+by ID. Versions 1 and 2 are converted in memory; the file is upgraded only on a
+dashboard save. Credentials remain in separate private files.
+
 The application owns:
 
 - selected provider and model policy;
@@ -194,17 +221,17 @@ Deferred work should use an explicit jobs table or an equally explicit schema ex
 - allowed skill application ID checks;
 - intent and slot mapping;
 - dialog directives and reprompts;
+- voice system instructions and shortening full answers for speech;
 - Alexa-specific speech and response JSON.
 
 It does not own:
 
 - provider request construction;
-- system prompt selection;
 - persistence records;
 - provider error parsing;
 - future background job lifecycle.
 
-`LaunchRequest` currently delegates into `AskGPTIntent` with a required `AMAZON.SearchQuery` slot. One-shot carrier phrases are defined in `skill/interaction-model.json`.
+`LaunchRequest`, help, fallback, and unrecognized intents delegate into `AskGPTIntent` with a required `AMAZON.SearchQuery` slot, so the next utterance is elicited as the question. One-shot carrier phrases are defined in `skill/interaction-model.json`.
 
 ## Listener Topology
 
@@ -248,7 +275,9 @@ Current request flow:
 5. ASK adapter speaks the short answer.
 ```
 
-The configured provider timeout defaults to six seconds. This improves the chance of returning inside Alexa's external deadline, but it does not make slow reasoning reliable.
+Alexa abandons a skill response after eight seconds. The ASK adapter therefore sets one seven-second deadline when a request arrives and runs verification, including a cold certificate fetch, and the application under it. When history is enabled, the application ends the provider call one second before that deadline and saves the outcome under a context detached from the caller's cancellation, so a timeout or a hung-up caller is still recorded. A caller hang-up is recorded as `ErrRequestCanceled` rather than as a provider failure.
+
+The configured provider timeout defaults to six seconds and is capped at six; whichever of the provider timeout and the remaining budget is shorter wins. This improves the chance of returning inside Alexa's external deadline, but it does not make slow reasoning reliable.
 
 Current limitations:
 
@@ -314,7 +343,17 @@ view.
 Dashboard-managed settings default to a versioned JSON file beside SQLite.
 The file is loaded after environment defaults and before secret-file loading,
 so a restart preserves the last explicit provider/model selection without
-turning the settings file into a credential store.
+turning the settings file into a credential store. Every field in it is
+optional: the dashboard writes only values that differ from the environment,
+an absent field leaves the environment's value in place, and the dashboard and
+startup log name each explicitly set variable that a saved value replaces.
+
+Credential, token, owner, and settings files are written through
+`internal/securefile`: a temporary file in the same directory, flushed and
+renamed over the target, so a crash cannot leave a truncated file. Files are
+mode 0600 on Unix and carry a protected owner, SYSTEM, and Administrators
+access list on Windows. A damaged ChatGPT credential file disables only that
+optional connector, with a dashboard notice, instead of stopping startup.
 
 The built-in owner login protects local management access. Remote
 administration would additionally require a private HTTPS management proxy,
@@ -352,7 +391,7 @@ Implemented test layers include:
 Still required:
 
 - broader physical Echo invocation and recognition regression tests;
-- deferred-job and restart-recovery tests once that layer exists.
+- Codex controller/worker idempotency, recovery, protocol, mTLS and partition tests.
 
 ## Implementation Status
 
@@ -369,12 +408,18 @@ Still required:
 ### Partially complete
 
 - Principal scoping: namespaced in the application, legacy-compatible in SQLite.
-- Provider timing: bounded for synchronous ASK, but no deferred path.
+- Provider timing: bounded for synchronous ASK; optional Codex tasks have independent durable deadlines.
 - Security: authenticated ingress has passed an Amazon-signed Developer Console request, but rate limits and spend caps remain.
 
 ### Not started
 
-- Durable jobs and idempotency.
-- Retention and deletion.
+- Ordinary direct-answer history retention and deletion.
 - Public multi-user hosting.
 - MCP runtime adapter.
+
+The optional task boundary is `app.TaskService` -> `taskgateway` -> `controlapi`.
+`control.Engine` owns authorization, routing, scheduling and the independent
+`controlstore` database. `codex.Worker` owns local roots, its execution ledger,
+outbound transport and supervised app-server. Provider inference configuration
+is separate from controller routing and worker authentication. See
+`codex-operations.md` for the protocol, recovery semantics and remaining live gates.

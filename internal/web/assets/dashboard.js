@@ -41,12 +41,13 @@
       if (form.dataset.submitting === "true") return;
 
       const submitter = event.submitter;
-      const action = submitter?.hasAttribute("formaction") ? submitter.formAction : form.action;
-      const method = submitter?.hasAttribute("formmethod") ? submitter.formMethod : form.method || "post";
+      const action = new URL(submitter?.getAttribute("formaction") || form.getAttribute("action") || window.location.href, window.location.href).href;
+      const method = (submitter?.getAttribute("formmethod") || form.getAttribute("method") || "post").toLowerCase();
       const fields = new URLSearchParams();
       for (const [name, value] of new FormData(form)) {
         if (typeof value === "string") fields.append(name, value);
       }
+      if (submitter?.name) fields.append(submitter.name, submitter.value);
 
       form.dataset.submitting = "true";
       if (submitter) {

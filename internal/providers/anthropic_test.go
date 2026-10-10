@@ -57,7 +57,7 @@ func TestAnthropicAsk(t *testing.T) {
 	if resp.ProviderName != "anthropic" {
 		t.Fatalf("ProviderName = %q", resp.ProviderName)
 	}
-	if resp.FullAnswer != "Hello from Claude." || resp.ShortAnswer != "Hello from Claude." {
+	if resp.FullAnswer != "Hello from Claude." {
 		t.Fatalf("response = %+v", resp)
 	}
 }

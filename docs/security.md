@@ -288,12 +288,12 @@ A real private user can accidentally create expensive load even when every reque
 
 ## Current Synchronous Request Risk
 
-The provider call is currently synchronous under the ASK request context. Provider timeouts default to six seconds.
+The provider call is currently synchronous under the ASK request context. The ASK adapter gives each request a seven-second response budget, measured from arrival, that covers signature verification, the provider call, and saving the outcome. The provider must finish one second before the budget ends so the outcome can always be recorded. Provider timeouts default to six seconds and cannot be configured above six, because Alexa abandons a response after eight.
 
 Consequences:
 
 - slow reasoning can time out;
-- the request is recorded as a failure;
+- the request is recorded as a failure, including when the caller hangs up first;
 - there is no accepted background state;
 - a retry can spend again because adapter request idempotency does not exist.
 

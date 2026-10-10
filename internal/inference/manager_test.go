@@ -69,8 +69,8 @@ func TestManagerUpdatePersistsSeparateCompatibleSettings(t *testing.T) {
 	}
 
 	snapshot := manager.Snapshot()
-	if snapshot.Compatible.Model != "gpt-5.6-luna" || snapshot.Compatible.EndpointKind != "Compatible Responses API" {
-		t.Fatalf("snapshot = %#v", snapshot.Compatible)
+	if snapshot.Provider(config.ProviderOpenAICompatible).Model != "gpt-5.6-luna" || snapshot.Provider(config.ProviderOpenAICompatible).EndpointKind != "Compatible Responses API" {
+		t.Fatalf("snapshot = %#v", snapshot.Provider(config.ProviderOpenAICompatible))
 	}
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -103,6 +103,23 @@ func TestManagerRejectsProviderWithoutCredential(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsTimeoutBeyondVoiceLimit(t *testing.T) {
+	cfg := testConfig(filepath.Join(t.TempDir(), "settings.json"))
+	service := app.NewService(app.Options{Model: cfg.OpenAI.Model}, stubProvider{}, nil)
+	manager, err := NewManager(&cfg, service)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	err = manager.Update(Update{
+		Provider: config.ProviderOpenAI, Model: "gpt-5.6-terra",
+		MaxOutputTokens: 1024, TimeoutSeconds: config.MaxProviderTimeoutSeconds + 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "timeout must be between 1 and") {
+		t.Fatalf("Update() error = %v, want the voice timeout limit", err)
+	}
+}
+
 func TestSnapshotNeverExposesCredential(t *testing.T) {
 	cfg := testConfig(filepath.Join(t.TempDir(), "settings.json"))
 	service := app.NewService(app.Options{Model: cfg.OpenAI.Model}, stubProvider{}, nil)
@@ -111,10 +128,10 @@ func TestSnapshotNeverExposesCredential(t *testing.T) {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 	snapshot := manager.Snapshot()
-	if !snapshot.OpenAI.CredentialConfigured || snapshot.OpenAI.CredentialSource != "Environment" {
-		t.Fatalf("credential state = %#v", snapshot.OpenAI)
+	if !snapshot.Provider(config.ProviderOpenAI).CredentialConfigured || snapshot.Provider(config.ProviderOpenAI).CredentialSource != "Environment" {
+		t.Fatalf("credential state = %#v", snapshot.Provider(config.ProviderOpenAI))
 	}
-	if strings.Contains(snapshot.OpenAI.EffectiveBaseURL, "secret-value") {
+	if strings.Contains(snapshot.Provider(config.ProviderOpenAI).EffectiveBaseURL, "secret-value") {
 		t.Fatal("snapshot leaked a credential")
 	}
 }
@@ -134,7 +151,7 @@ func TestManagerSelectsOnlyConnectedChatGPTAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	snapshot := manager.Snapshot().OpenAI
+	snapshot := manager.Snapshot().Provider(config.ProviderOpenAI)
 	if snapshot.AuthMode != config.OpenAIAuthModeChatGPT || !snapshot.ChatGPTConnected || snapshot.CredentialSource != "ChatGPT account" || snapshot.EndpointKind != "ChatGPT Codex Responses" {
 		t.Fatalf("ChatGPT snapshot = %#v", snapshot)
 	}
@@ -207,7 +224,7 @@ func TestManagedAnthropicAPIKeyReachesOfficialMessagesTransport(t *testing.T) {
 	if answer.FullAnswer != "Managed key works." {
 		t.Fatalf("answer = %#v", answer)
 	}
-	snapshot := manager.Snapshot().Anthropic
+	snapshot := manager.Snapshot().Provider(config.ProviderAnthropic)
 	if !snapshot.ManagedAPIKey || snapshot.CredentialSource != "Saved locally" {
 		t.Fatalf("managed credential state = %#v", snapshot)
 	}
@@ -215,7 +232,7 @@ func TestManagedAnthropicAPIKeyReachesOfficialMessagesTransport(t *testing.T) {
 	if err := manager.ClearAPIKey(config.ProviderAnthropic); err != nil {
 		t.Fatal(err)
 	}
-	if state := manager.Snapshot().Anthropic; state.CredentialConfigured || state.ManagedAPIKey {
+	if state := manager.Snapshot().Provider(config.ProviderAnthropic); state.CredentialConfigured || state.ManagedAPIKey {
 		t.Fatalf("cleared credential state = %#v", state)
 	}
 }
@@ -266,7 +283,7 @@ func TestCompatibleRouteKeepsItsOwnCredentialAndProviderIdentity(t *testing.T) {
 		t.Fatalf("answer = %#v", answer)
 	}
 	snapshot := manager.Snapshot()
-	if !snapshot.Compatible.Active || snapshot.OpenAI.Active || snapshot.Compatible.CredentialSource != "Saved locally" {
+	if !snapshot.Provider(config.ProviderOpenAICompatible).Active || snapshot.Provider(config.ProviderOpenAI).Active || snapshot.Provider(config.ProviderOpenAICompatible).CredentialSource != "Saved locally" {
 		t.Fatalf("separate compatible state = %#v", snapshot)
 	}
 }
@@ -291,5 +308,53 @@ func testConfig(settingsPath string) config.Config {
 			APIKey: "anthropic-secret", Model: "claude-test", MaxOutputTokens: 4096,
 			Timeout: 6 * time.Second,
 		},
+	}
+}
+
+func TestManagerActivatesAndPersistsChatCompletions(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("wrong API route: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"model":"resolved-local","choices":[{"finish_reason":"stop","message":{"content":"Chat Completions works."}}]}`))
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "settings.json")
+	cfg := testConfig(path)
+	service := app.NewService(app.Options{}, stubProvider{}, nil)
+	manager, err := NewManager(&cfg, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := Update{
+		Provider: config.ProviderOpenAICompatible, Model: "local-model", BaseURL: server.URL + "/v1",
+		APIFormat: config.FormatChatCompletions, MaxOutputTokens: 256, TimeoutSeconds: 2,
+	}
+	if err := manager.Update(update); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := service.Ask(t.Context(), app.AskRequest{Principal: app.Principal{Namespace: "test", Subject: "local"}, Prompt: "question"})
+	if err != nil || answer.FullAnswer != "Chat Completions works." || answer.Model != "resolved-local" {
+		t.Fatalf("answer = %+v, error = %v", answer, err)
+	}
+	state := manager.Snapshot().Provider(config.ProviderOpenAICompatible)
+	if state.APIFormat != config.FormatChatCompletions || state.EndpointKind != "Compatible Chat Completions API" || !state.Active {
+		t.Fatalf("format state = %+v", state)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"api_format": "chat-completions"`) || strings.Contains(string(data), cfg.Compatible.APIKey) {
+		t.Fatalf("settings did not persist the format safely: %s", data)
+	}
+	update.APIFormat = "guess"
+	if err := manager.Update(update); err == nil {
+		t.Fatal("invalid format was accepted")
+	}
+	if manager.Snapshot().Provider(config.ProviderOpenAICompatible).APIFormat != config.FormatChatCompletions || requests != 1 {
+		t.Fatal("invalid update changed the live route or invoked a provider")
 	}
 }

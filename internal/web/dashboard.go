@@ -24,6 +24,7 @@ import (
 	"github.com/wellivea1/alexa-brainslug/internal/inference"
 	"github.com/wellivea1/alexa-brainslug/internal/openauth"
 	"github.com/wellivea1/alexa-brainslug/internal/store"
+	"github.com/wellivea1/alexa-brainslug/internal/taskgateway"
 )
 
 const (
@@ -33,9 +34,6 @@ const (
 	sectionOverview          = "overview"
 	sectionActivity          = "activity"
 	sectionInference         = "inference"
-	providerOpenAI           = "openai"
-	providerCompatible       = "openai-compatible"
-	providerAnthropic        = "anthropic"
 	schemeHTTP               = "http"
 	schemeHTTPS              = "https"
 	dashboardFetchHeader     = "X-Brainslug-Dashboard"
@@ -82,6 +80,7 @@ type OpenAIAuthController interface {
 
 // Options describes fixed process state and optional test seams.
 type Options struct {
+	Tasks                   *taskgateway.Manager
 	Inference               InferenceController
 	OpenAIAuth              OpenAIAuthController
 	StartedAt               time.Time
@@ -94,6 +93,7 @@ type Options struct {
 
 // Dashboard renders operational state, history, and provider management.
 type Dashboard struct {
+	tasks                   *taskgateway.Manager
 	store                   Store
 	inference               InferenceController
 	openAIAuth              OpenAIAuthController
@@ -120,6 +120,7 @@ func NewDashboard(history Store, configured ...Options) *Dashboard {
 		options.CSRFToken = newCSRFToken()
 	}
 	return &Dashboard{
+		tasks:                   options.Tasks,
 		store:                   history,
 		inference:               options.Inference,
 		openAIAuth:              options.OpenAIAuth,
@@ -191,6 +192,7 @@ func (d *Dashboard) HandleProviderUpdate(w http.ResponseWriter, r *http.Request)
 		TimeoutSeconds:  timeoutSeconds,
 		ReasoningEffort: r.PostFormValue("reasoning_effort"),
 		TextVerbosity:   r.PostFormValue("text_verbosity"),
+		APIFormat:       r.PostFormValue("api_format"),
 	})
 	if err != nil {
 		d.renderIndex(w, r, http.StatusBadRequest, err.Error())
@@ -363,6 +365,7 @@ type pageData struct {
 	Stats                dashboardStats
 	Inference            inference.Snapshot
 	ActiveProvider       inference.ProviderState
+	SelectedProvider     inference.ProviderState
 	Interactions         []store.Interaction
 	OverviewInteractions []store.Interaction
 	Query                string
@@ -372,6 +375,7 @@ type pageData struct {
 	OpenAIModels         []modelOption
 	OpenAIAuth           openauth.Snapshot
 	DeviceAuth           *openauth.DeviceFlow
+	MaxTimeoutSeconds    int
 }
 
 type systemView struct {
@@ -424,6 +428,16 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 	if d.inference != nil {
 		inferenceSnapshot = d.inference.Snapshot()
 	}
+	var providerStates []inference.ProviderState
+	for _, definition := range config.ProviderDefinitions() {
+		state := inferenceSnapshot.Provider(definition.ID)
+		state.Definition = definition
+		if state.ID == "" {
+			state.ID, state.Name, state.EndpointKind, state.APIFormat = definition.ID, definition.Name, definition.EndpointKind, definition.Format
+		}
+		providerStates = append(providerStates, state)
+	}
+	inferenceSnapshot.Providers = providerStates
 	activeProvider := activeProviderState(&inferenceSnapshot)
 	providerTab := normalizedProviderTab(firstNonEmpty(r.FormValue("provider"), r.URL.Query().Get("provider")), inferenceSnapshot.ActiveProvider)
 	var openAIAuthSnapshot openauth.Snapshot
@@ -453,6 +467,7 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 		Stats:                calculateStats(interactions),
 		Inference:            inferenceSnapshot,
 		ActiveProvider:       activeProvider,
+		SelectedProvider:     inferenceSnapshot.Provider(providerTab),
 		Interactions:         filtered,
 		OverviewInteractions: overview,
 		Query:                query,
@@ -462,6 +477,7 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 		OpenAIModels:         openAIModels,
 		OpenAIAuth:           openAIAuthSnapshot,
 		DeviceAuth:           deviceAuth,
+		MaxTimeoutSeconds:    config.MaxProviderTimeoutSeconds,
 	}
 	if r.URL.Query().Get("saved") == "1" {
 		data.Notice = "Inference settings saved and activated."
@@ -477,7 +493,7 @@ func (d *Dashboard) renderIndex(w http.ResponseWriter, r *http.Request, status i
 	}
 	switch r.URL.Query().Get("auth") {
 	case "connected":
-		if inferenceSnapshot.OpenAI.AuthMode == config.OpenAIAuthModeChatGPT {
+		if inferenceSnapshot.Provider(config.ProviderOpenAI).AuthMode == config.OpenAIAuthModeChatGPT {
 			data.Notice = "ChatGPT account reconnected."
 		} else {
 			data.Notice = "ChatGPT account connected. Select it below and save settings to activate it."
@@ -599,17 +615,13 @@ func normalizedSection(value string) string {
 }
 
 func normalizedProviderTab(value, active string) string {
-	for _, provider := range []string{providerOpenAI, providerCompatible, providerAnthropic} {
-		if strings.EqualFold(strings.TrimSpace(value), provider) {
-			return provider
-		}
+	if provider := normalizedProvider(value); provider != "" {
+		return provider
 	}
-	for _, provider := range []string{providerCompatible, providerAnthropic} {
-		if strings.EqualFold(strings.TrimSpace(active), provider) {
-			return provider
-		}
+	if provider := normalizedProvider(active); provider != "" {
+		return provider
 	}
-	return providerOpenAI
+	return config.ProviderDefinitions()[0].ID
 }
 
 func sectionCopy(section string) (title, description string) {
@@ -625,23 +637,14 @@ func sectionCopy(section string) (title, description string) {
 
 func normalizedProvider(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	for _, provider := range []string{providerOpenAI, providerCompatible, providerAnthropic} {
-		if value == provider {
-			return provider
-		}
+	if _, ok := config.LookupProvider(value); ok {
+		return value
 	}
 	return ""
 }
 
 func activeProviderState(snapshot *inference.Snapshot) inference.ProviderState {
-	switch snapshot.ActiveProvider {
-	case providerCompatible:
-		return snapshot.Compatible
-	case providerAnthropic:
-		return snapshot.Anthropic
-	default:
-		return snapshot.OpenAI
-	}
+	return snapshot.Provider(snapshot.ActiveProvider)
 }
 
 func sameOrigin(r *http.Request) error {

@@ -106,8 +106,8 @@ type Request struct {
 	// yield ErrOutputLimit before the model writes an answer.
 	MaxOutputTokens int
 
-	// SystemPrompt shapes the answer for speech. Empty means the package
-	// default.
+	// SystemPrompt is supplied by the inbound adapter. Empty means no
+	// additional instructions; providers do not choose a presentation style.
 	SystemPrompt string
 
 	// PriorContext is earlier conversation turns, oldest first. Providers
@@ -118,17 +118,14 @@ type Request struct {
 // Message is one turn of prior conversation context.
 type Message struct {
 	// Role is "user" or "assistant". Other values are ignored.
-	Role string
+	Role string `json:"role"`
 
 	// Content is the turn's text.
-	Content string
+	Content string `json:"content"`
 }
 
 // Response is a provider's answer.
 type Response struct {
-	// ShortAnswer is shaped for speech and is what Alexa says.
-	ShortAnswer string
-
 	// FullAnswer is the complete model output, stored locally.
 	FullAnswer string
 

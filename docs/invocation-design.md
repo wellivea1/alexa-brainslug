@@ -159,6 +159,8 @@ Current states:
 - repository failure -> local history error;
 - empty saved success -> empty-response message.
 
+A retrieval phrase such as "last response" spoken in answer to "What should I ask?" may be captured as the `Query` slot instead of matching `LastResponseIntent`. The adapter recognizes the `LastResponseIntent` samples and close variants in `Query` and answers them from history instead of sending them to the provider.
+
 There is no pending or canceled job state yet.
 
 ## Deferred Response Design
@@ -185,9 +187,11 @@ The exact wording should be chosen after the durable job state machine exists. D
 
 ## Help And Fallback
 
-Current help explains that the user can ask Brain Slug a question and request the last response.
+Help, fallback, and unrecognized intents answer the same way launch does: short speech followed by `Dialog.Delegate` into `AskGPTIntent`, so the dialog model elicits `Query` and the user's next utterance becomes the question.
 
-Fallback keeps the session open and prompts for the question again.
+A plain open session would not work here. Every `AskGPTIntent` sample needs a carrier phrase, so outside slot elicitation a bare question matches no intent and lands in fallback again. Amazon permits chaining from any intent into a custom intent that has a dialog model.
+
+Current help explains what Brainslug does and teaches `ask Brain Slug what was the last answer`, which is an exact `LastResponseIntent` sample. A test keeps that phrase tied to the interaction model.
 
 Real-device testing should determine whether help needs to give an explicit one-shot example or emphasize the two-turn flow.
 
@@ -261,6 +265,8 @@ Code-level:
 - [x] `Query` is required.
 - [x] Dialog response directive is represented in Go.
 - [x] Launch delegates to the question intent.
+- [x] Help, fallback, and unrecognized intents delegate to the question intent.
+- [x] Spoken retrieval guidance names an exact interaction-model sample.
 - [x] ASK tests use a fake application service.
 - [x] Output-limit and provider failures map to stable speech.
 
